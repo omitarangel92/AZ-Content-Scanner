@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#830051">
+    <title>AZ Content Scanner</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23830051'/%3E%3Ctext x='16' y='22' font-size='16' font-weight='700' text-anchor='middle' fill='%23fff' font-family='Arial'%3EAZ%3C/text%3E%3C/svg%3E">
+    <link rel="preload" href="./fonts/nunito-sans-latin.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="preload" href="./fonts/nunito-latin.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="stylesheet" href="./css/tokens.css?v=40">
+    <link rel="stylesheet" href="./css/styles.css?v=40">
+</head>
+<body>
+<a class="skip-link" href="#main">Saltar al contenido</a>
+<noscript><p class="noscript">Esta aplicación necesita JavaScript para funcionar.</p></noscript>
+
+<!-- Iconos (trazo, heredan el color del texto) -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></symbol>
+    <symbol id="i-radar" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><path d="M12 12 19 5"/><circle cx="12" cy="12" r="1" fill="currentColor"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 21s7.5-3.6 7.5-9.5V5.5L12 3 4.5 5.5v6C4.5 17.4 12 21 12 21z"/><path d="m9 12 2.2 2.2L15.5 10"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15l12-7.5z" fill="currentColor"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v2.5A1.5 1.5 0 0 0 5.5 21h13a1.5 1.5 0 0 0 1.5-1.5V17"/></symbol>
+    <symbol id="i-print" viewBox="0 0 24 24"><path d="M7 8V3.5h10V8M7 17H4.5v-7A1.5 1.5 0 0 1 6 8.5h12a1.5 1.5 0 0 1 1.5 1.5v7H17"/><rect x="7" y="14" width="10" height="6.5" rx="1"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><circle cx="12" cy="7.8" r=".6" fill="currentColor"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/></symbol>
+</svg>
+
+<div class="app">
+    <!-- ===================== Barra lateral ===================== -->
+    <aside class="sidebar" aria-label="Navegación principal">
+        <div class="sb-brand">
+            <span class="sb-logo">
+                <!-- Logo oficial: descárgalo del portal OnBrand y guárdalo como public/img/astrazeneca-logo.svg.
+                     Mientras no exista, se muestra solo el nombre en texto. -->
+                <img src="./img/astrazeneca-logo.svg" alt="AstraZeneca"
+                     onerror="this.replaceWith(Object.assign(document.createElement('span'), { className: 'sb-logo-text', textContent: 'AstraZeneca' }))">
+            </span>
+            <span class="sb-name">Content Scanner</span>
+        </div>
+
+        <nav class="sb-nav" aria-label="Secciones">
+            <a href="#/dashboard" data-nav="dashboard"><svg class="ico"><use href="#i-grid"/></svg><span>Panel</span></a>
+            <a href="#/scan" data-nav="scan"><svg class="ico"><use href="#i-radar"/></svg><span>Nuevo escaneo</span></a>
+            <a href="#/history" data-nav="history"><svg class="ico"><use href="#i-clock"/></svg><span>Historial</span></a>
+            <a href="#/accounts" data-nav="accounts"><svg class="ico"><use href="#i-shield"/></svg><span>Cuentas</span></a>
+        </nav>
+
+        <div class="sb-foot">
+            <div class="sb-label">Conexiones</div>
+            <div class="session-dots" id="session-dots" aria-label="Estado de las cuentas"></div>
+            <div class="sb-version">v3.1 · Uso interno AstraZeneca LATAM</div>
+        </div>
+    </aside>
+
+    <!-- ===================== Contenido ===================== -->
+    <div class="workspace">
+        <header class="topbar">
+            <div class="tb-title">
+                <p class="page-meta" id="last-scan-meta">Aún no hay escaneos en este equipo</p>
+                <h1 id="view-title">Panel de cumplimiento</h1>
+            </div>
+            <div class="tb-actions">
+                <span id="server-pill" class="pill" role="status">Conectando…</span>
+                <a class="btn btn-primary btn-sm" href="#/scan"><svg class="ico"><use href="#i-play"/></svg>Nuevo escaneo</a>
+            </div>
+        </header>
+
+        <main id="main" class="main">
+
+            <!-- Progreso: visible en cualquier vista mientras hay un escaneo -->
+            <section id="progress-card" class="card progress-card" hidden aria-label="Progreso del escaneo">
+                <div class="card-head">
+                    <div>
+                        <h2><span class="live-dot" aria-hidden="true"></span>Escaneo en curso</h2>
+                        <p class="hint" id="progress-site"></p>
+                    </div>
+                    <button class="btn btn-danger-ghost btn-sm" onclick="cancelCurrentScan()"><svg class="ico"><use href="#i-stop"/></svg>Detener (conserva lo encontrado)</button>
+                </div>
+                <ol class="stepper" id="stepper">
+                    <li data-step="1"><span class="dot">1</span><span>Cuentas</span></li>
+                    <li data-step="2"><span class="dot">2</span><span>Descubrir páginas</span></li>
+                    <li data-step="3"><span class="dot">3</span><span>Revisar contenido</span></li>
+                    <li data-step="4"><span class="dot">4</span><span>Fechas en PromoMats</span></li>
+                </ol>
+                <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="progress-track"><div id="progress-bar" class="bar-fill"></div></div>
+                <div class="live-stats">
+                    <div><b id="prog-elapsed">0:00</b><small>Tiempo</small></div>
+                    <div><b id="prog-pages">0</b><small>Páginas revisadas</small></div>
+                    <div><b id="prog-ids">0</b><small>Approval IDs</small></div>
+                    <div><b id="prog-percent">0%</b><small>Avance</small></div>
+                </div>
+                <p id="progress-detail" class="activity" aria-live="polite">Preparando…</p>
+            </section>
+
+            <!-- ============ Vista: Panel ============ -->
+            <div class="view" id="view-dashboard" data-view="dashboard">
+                <div id="history-banner" class="banner" hidden></div>
+
+                <div class="kpis">
+                    <button class="kpi kpi-danger" data-filter="VENCIDO" onclick="setStatusFilter('VENCIDO')">
+                        <span class="kpi-label">Vencidos</span><strong id="metric-vencido">0</strong><small>Retirar o renovar</small><i class="kpi-bar"><b></b></i>
+                    </button>
+                    <button class="kpi kpi-warning" data-filter="PROXIMO A VENCER" onclick="setStatusFilter('PROXIMO A VENCER')">
+                        <span class="kpi-label">Por vencer</span><strong id="metric-prox">0</strong><small>Próximos 60 días</small><i class="kpi-bar"><b></b></i>
+                    </button>
+                    <button class="kpi kpi-success" data-filter="VIGENTE" onclick="setStatusFilter('VIGENTE')">
+                        <span class="kpi-label">Vigentes</span><strong id="metric-vigente">0</strong><small>Sin acción</small><i class="kpi-bar"><b></b></i>
+                    </button>
+                    <button class="kpi kpi-retired" data-filter="RETIRADO" onclick="setStatusFilter('RETIRADO')">
+                        <span class="kpi-label">Retirados</span><strong id="metric-retirado">0</strong><small>Siguen publicados</small><i class="kpi-bar"><b></b></i>
+                    </button>
+                    <button class="kpi kpi-neutral" data-filter="SIN FECHA" onclick="setStatusFilter('SIN FECHA')">
+                        <span class="kpi-label">Por revisar</span><strong id="metric-sinfecha">0</strong><small>Sin fecha / no encontrados</small><i class="kpi-bar"><b></b></i>
+                    </button>
+                    <button class="kpi kpi-brand" data-filter="" onclick="setStatusFilter('')">
+                        <span class="kpi-label">Total</span><strong id="metric-total">0</strong><small>Approval IDs</small><i class="kpi-bar"><b style="width:100%"></b></i>
+                    </button>
+                </div>
+
+                <!-- Indicadores: índice de cumplimiento, distribución y calendario de vencimientos -->
+                <div class="insights" id="insights" hidden>
+                    <section class="card hero" aria-label="Índice de cumplimiento">
+                        <div id="insight-score"></div>
+                    </section>
+                    <section class="card" aria-label="Distribución por estado">
+                        <h3 class="card-title">Distribución</h3>
+                        <div id="insight-dist" class="dist"></div>
+                    </section>
+                    <section class="card" aria-label="Calendario de vencimientos">
+                        <h3 class="card-title">Vencimientos próximos 6 meses</h3>
+                        <div id="insight-timeline"></div>
+                    </section>
+                </div>
+
+                <section class="card" id="results">
+                    <div class="card-head">
+                        <div>
+                            <h2>Materiales detectados</h2>
+                            <p class="hint" id="results-subtitle">Aún no hay resultados. Inicia un escaneo o abre uno del historial.</p>
+                        </div>
+                        <span id="results-badge"></span>
+                    </div>
+
+                    <div id="coverage-box" class="coverage"></div>
+
+                    <div class="table-toolbar">
+                        <div class="toolbar-left">
+                            <input id="filter-q" type="search" placeholder="Buscar por ID o URL…" aria-label="Buscar por ID o URL" oninput="onSearch()">
+                            <select id="filter-type" aria-label="Filtrar por tipo" onchange="onTypeFilter()">
+                                <option value="">Todos los tipos</option>
+                            </select>
+                            <!-- En móvil la tabla pasa a tarjetas (sin cabecera): el orden se elige aquí -->
+                            <select id="filter-sort" class="sort-mobile" aria-label="Ordenar por" onchange="onSortSelect()">
+                                <option value="">Orden original</option>
+                                <option value="status:1">Estado: más urgente primero</option>
+                                <option value="days:1">Días restantes: menos primero</option>
+                                <option value="expiration:1">Vence: más próximo primero</option>
+                                <option value="expiration:-1">Vence: más lejano primero</option>
+                                <option value="id:1">Approval ID: A → Z</option>
+                                <option value="pages:-1">Páginas: más primero</option>
+                            </select>
+                            <span id="assets-count" class="hint" aria-live="polite"></span>
+                            <button id="clear-filter" class="btn btn-ghost btn-sm" hidden onclick="clearFilters()">Quitar filtros</button>
+                        </div>
+                        <div class="toolbar-right">
+                            <button class="btn btn-ghost btn-sm" onclick="exportCSV()"><svg class="ico"><use href="#i-download"/></svg>CSV</button>
+                            <button class="btn btn-ghost btn-sm" onclick="exportPDF()"><svg class="ico"><use href="#i-print"/></svg>Informe</button>
+                        </div>
+                    </div>
+                    <div class="table-wrap">
+                        <table class="table" id="results-table">
+                            <thead><tr>
+                                <th data-sort="status" aria-sort="none"><button type="button" onclick="setSort('status')">Estado</button></th>
+                                <th data-sort="id" aria-sort="none"><button type="button" onclick="setSort('id')">Approval ID</button></th>
+                                <th data-sort="type" aria-sort="none"><button type="button" onclick="setSort('type')">Tipo</button></th>
+                                <th data-sort="expiration" aria-sort="none"><button type="button" onclick="setSort('expiration')">Vence</button></th>
+                                <th data-sort="days" aria-sort="none" class="center"><button type="button" onclick="setSort('days')">Días</button></th>
+                                <th>Dónde aparece</th>
+                                <th data-sort="pages" aria-sort="none" class="center"><button type="button" onclick="setSort('pages')">Págs.</button></th>
+                                <th><span class="sr-only">Acciones</span></th>
+                            </tr></thead>
+                            <tbody id="results-table-body"><tr><td colspan="8" class="empty-row">Los activos encontrados aparecerán aquí.</td></tr></tbody>
+                        </table>
+                    </div>
+                    <div class="more-row"><button id="btn-more" class="btn btn-ghost btn-sm" hidden onclick="showMore()">Mostrar más</button></div>
+                </section>
+            </div>
+
+            <!-- ============ Vista: Nuevo escaneo ============ -->
+            <div class="view" id="view-scan" data-view="scan" hidden>
+                <div class="scan-layout">
+                    <div class="scan-main">
+                        <section class="card">
+                            <div class="step-head">
+                                <span class="step-num" aria-hidden="true">1</span>
+                                <div>
+                                    <h2>Elige el sitio</h2>
+                                    <p class="hint">Después se lee el menú de la página principal para que elijas qué áreas analizar.</p>
+                                </div>
+                            </div>
+                            <div class="field-row">
+                                <label class="field"><span>Región</span><select id="region-select" onchange="onRegionChange()"></select></label>
+                                <label class="field"><span>País</span><select id="country-select" onchange="onCountryChange()"></select></label>
+                            </div>
+                            <label class="field"><span>Sitio</span><input type="text" id="target-url" spellcheck="false" autocomplete="off"></label>
+                            <details class="advanced">
+                                <summary>Opciones avanzadas</summary>
+                                <label class="field">
+                                    <span>URLs adicionales (una por línea)</span>
+                                    <textarea id="extra-urls" rows="3" placeholder="Páginas de un área publicadas fuera de su ruta, micrositios o campañas"></textarea>
+                                </label>
+                            </details>
+                            <button id="btn-detect" class="btn btn-primary" onclick="detectSections()"><svg class="ico"><use href="#i-radar"/></svg>Detectar áreas del sitio</button>
+                            <div id="detect-loader" class="loader-bar" role="progressbar" aria-label="Leyendo el menú del sitio" aria-busy="true" hidden><span></span></div>
+                            <p id="detect-msg" class="hint detect-msg" role="status" aria-live="polite"></p>
+                        </section>
+
+                        <section class="card" id="sections-card">
+                            <div class="step-head">
+                                <span class="step-num" aria-hidden="true">2</span>
+                                <div>
+                                    <h2>Elige qué analizar</h2>
+                                    <p class="hint">Marca las áreas del menú que quieres auditar. Solo se rastrean esas ramas.</p>
+                                </div>
+                            </div>
+
+                            <p id="sections-empty" class="empty-note">Pulsa «Detectar áreas del sitio» para leer el menú de la página principal.</p>
+                            <div id="sections-panel" hidden>
+                                <div class="sections-tools">
+                                    <button class="btn btn-ghost btn-sm" onclick="selectAllSections(true)">Seleccionar todo</button>
+                                    <button class="btn btn-ghost btn-sm" onclick="selectAllSections(false)">Ninguna</button>
+                                    <span id="sections-summary" class="hint" aria-live="polite"></span>
+                                </div>
+                                <div id="sections-list" class="sections-list" role="group" aria-label="Áreas del sitio"></div>
+                            </div>
+
+                            <label class="full-toggle" id="queue-toggle" hidden>
+                                <input type="checkbox" id="mode-queue" checked onchange="updateStartState()">
+                                <span><strong>Escanear en cola (recomendado)</strong><small>Una área tras otra, con pausa entre ellas y reintento de las bloqueadas por el WAF. Al final se entrega un solo informe consolidado.</small></span>
+                            </label>
+
+                            <label class="full-toggle">
+                                <input type="checkbox" id="mode-full" onchange="onFullToggle()">
+                                <span><strong>Analizar el sitio completo</strong><small>Rastrea todo el sitio (hasta el límite de páginas). Más lento y con más riesgo de bloqueo.</small></span>
+                            </label>
+
+                            <aside class="disclaimer" role="note">
+                                <svg class="ico"><use href="#i-info"/></svg>
+                                <div>
+                                    <strong>¿Por qué por áreas?</strong>
+                                    <p>Los sitios AZMED están protegidos por un firewall (WAF) que bloquea el tráfico automatizado cuando detecta muchas peticiones seguidas. Un rastreo completo puede superar los cientos de páginas y provocar bloqueos que dejan el escaneo incompleto. Analizar por áreas reduce las peticiones, entrega resultados más rápido y permite repetir el análisis por partes. <b>Para cubrir varias áreas, usa la cola: las escanea una por una con pausas.</b></p>
+                                </div>
+                            </aside>
+                        </section>
+                    </div>
+
+                    <div class="scan-side">
+                        <section class="card">
+                            <div class="step-head">
+                                <span class="step-num" aria-hidden="true">3</span>
+                                <div>
+                                    <h2>Lanza el escaneo</h2>
+                                    <p class="hint">Si falta alguna cuenta, se abrirá una ventana para conectarla antes de empezar.</p>
+                                </div>
+                            </div>
+                            <div id="readiness" class="readiness"></div>
+                            <button id="btn-start-scan" class="btn btn-primary btn-block" onclick="requestScan()" disabled><svg class="ico"><use href="#i-play"/></svg>Iniciar escaneo</button>
+                            <div id="start-loader" class="loader-bar" role="progressbar" aria-label="Comprobando las sesiones" aria-busy="true" hidden><span></span></div>
+                            <p id="start-hint" class="hint start-hint">Detecta las áreas y marca al menos una, o elige el sitio completo.</p>
+                            <div id="scan-notice" class="notice" role="alert" hidden></div>
+                            <p class="hint scan-links">¿Falta alguna conexión? <a href="#/accounts">Configura tus cuentas</a>.</p>
+                        </section>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ============ Vista: Historial ============ -->
+            <div class="view" id="view-history" data-view="history" hidden>
+                <section class="card" id="history">
+                    <div class="card-head">
+                        <div>
+                            <h2>Escaneos guardados</h2>
+                            <p class="hint">Últimos 10 escaneos guardados en este equipo.</p>
+                        </div>
+                        <button class="btn btn-ghost btn-sm" onclick="loadScanHistory()">↻ Actualizar</button>
+                    </div>
+                    <div class="table-wrap">
+                        <table class="table">
+                            <thead><tr>
+                                <th>Fecha</th><th>Sitio</th><th>Resultado</th><th class="center">Págs.</th>
+                                <th class="center">Vencidos</th><th class="center">Por vencer</th><th class="center">Vigentes</th><th class="center">Por revisar</th><th><span class="sr-only">Acciones</span></th>
+                            </tr></thead>
+                            <tbody id="history-table-body"><tr><td colspan="9" class="empty-row">Cargando…</td></tr></tbody>
+                        </table>
+                    </div>
+                </section>
+            </div>
+
+            <!-- ============ Vista: Cuentas ============ -->
+            <div class="view" id="view-accounts" data-view="accounts" hidden>
+                <section class="card">
+                    <div class="step-head">
+                        <span class="step-num" aria-hidden="true"><svg class="ico"><use href="#i-shield"/></svg></span>
+                        <div>
+                            <h2>Conecta tus cuentas</h2>
+                            <p class="hint">Se abre una ventana del navegador: inicia sesión (incluido MFA) y pulsa "Terminé". Las sesiones se guardan solo en este equipo.</p>
+                        </div>
+                    </div>
+                    <div id="sessions-list" class="sessions-list"></div>
+                    <button class="btn btn-ghost btn-sm" id="btn-validate" onclick="validateSessions(false)">Comprobar estado de las cuentas</button>
+                    <p id="validate-msg" class="hint" role="status" aria-live="polite"></p>
+                </section>
+            </div>
+        </main>
+    </div>
+</div>
+
+<!-- Conexión de cuentas antes de escanear -->
+<div id="session-modal" class="modal" hidden>
+    <div class="modal-box gate-box" role="dialog" aria-modal="true" aria-labelledby="gate-title">
+        <div class="card-head">
+            <div>
+                <h2 id="gate-title">Conecta las cuentas para escanear</h2>
+                <p class="hint">El escaneo necesita las 3 cuentas para comparar los Approval IDs con PromoMats. Inicia sesión en las que faltan: se validan solas y el escaneo empieza cuando estén las 3.</p>
+            </div>
+        </div>
+        <div id="gate-list" class="gate-list"></div>
+        <div id="gate-loader" class="loader-bar" role="progressbar" aria-label="Validando las cuentas" aria-busy="true" hidden><span></span></div>
+        <p id="gate-status" class="hint gate-status" role="status" aria-live="polite"></p>
+        <div class="gate-foot">
+            <button id="gate-connect" class="btn btn-primary" onclick="gateConnectAll()">Conectar las que faltan</button>
+            <button class="btn btn-ghost" onclick="closeSessionGate(true)">Cancelar</button>
+        </div>
+    </div>
+</div>
+
+<!-- Detalle de un activo -->
+<div id="analysis-modal" class="modal" hidden onclick="if (event.target === this) closeAnalysisModal()">
+    <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="ana-veeva-id">
+        <div class="card-head">
+            <div>
+                <h2 id="ana-veeva-id" class="mono">--</h2>
+                <p class="hint" id="ana-type"></p>
+            </div>
+            <button class="btn btn-ghost btn-sm" onclick="closeAnalysisModal()" aria-label="Cerrar detalle">✕ Cerrar</button>
+        </div>
+        <div class="detail-grid">
+            <div><small>Estado</small><span id="ana-status" class="badge">--</span></div>
+            <div><small>Aprobado</small><span id="ana-approved" class="mono">--</span></div>
+            <div><small>Vence</small><span id="ana-date" class="mono">--</span></div>
+            <div><small>Días restantes</small><span id="ana-days" class="mono">--</span></div>
+        </div>
+        <p id="ana-note" class="callout" hidden></p>
+        <div class="detail-block"><small>Página</small><a id="ana-url" href="#" target="_blank" rel="noopener noreferrer" class="link wrap">--</a></div>
+        <div class="detail-block"><small>Archivo / recurso</small><span id="ana-asset" class="mono wrap">--</span></div>
+        <div class="detail-block"><small>Texto donde aparece</small><span id="ana-snippet" class="wrap"></span></div>
+        <details class="detail-block"><summary id="ana-pages-summary">Todas las páginas donde aparece</summary><ul id="ana-pages" class="url-list"></ul></details>
+        <div class="evidence" id="ana-preview-container"></div>
+
+        <div class="review">
+            <strong>¿La detección es correcta?</strong>
+            <div class="btn-row">
+                <button class="btn btn-success btn-sm" onclick="submitReview('correcta')">✔ Sí, es correcta</button>
+                <button class="btn btn-danger btn-sm" onclick="submitReview('incorrecta')">✖ No, es incorrecta</button>
+            </div>
+            <div class="field-row">
+                <input id="rev-corrected-id" placeholder="ID correcto (opcional)" aria-label="ID correcto">
+                <input id="rev-corrected-date" type="date" aria-label="Fecha correcta (opcional)">
+            </div>
+            <input id="rev-notes" placeholder="Notas (opcional)" aria-label="Notas">
+            <p id="rev-msg" class="hint" role="status" aria-live="polite"></p>
+            <p id="precision-box" class="hint mono"></p>
+            <details class="advanced">
+                <summary>Reportar un ID que no se detectó</summary>
+                <div class="field-row">
+                    <input id="missed-id" placeholder="Ej. CC-14803" aria-label="ID no detectado">
+                    <input id="missed-url" placeholder="URL de la página" aria-label="URL donde aparece">
+                </div>
+                <button class="btn btn-ghost btn-sm" onclick="registerMissed()">+ Registrar</button>
+            </details>
+        </div>
+    </div>
+</div>
+
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+<script src="./js/csv.js?v=40"></script>
+<script src="./js/app.js?v=40"></script>
+</body>
+</html>

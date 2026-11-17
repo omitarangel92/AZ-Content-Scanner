@@ -1,0 +1,117 @@
+/* ============================================================
+   AZ Content Scanner — tokens de marca y de estilo
+   Colores: AstraZeneca OnBrand (Colour, sep. 2025).
+
+   Reglas de color de las guías que este diseño respeta:
+   · Mulberry y blanco dominan; los colores secundarios (Purple, Navy, Light Blue, Lime) se usan con
+     moderación y NO como fondo de bloques de texto ni para escribir.
+   · Light Blue y Lime Green NO se usan para tipografía ni fondos: solo como acento decorativo.
+   · Gold es para destacar (datos clave), nunca como color de texto sobre blanco.
+   · Accesibilidad: combinaciones AA como mínimo (texto normal ≥ 4.5:1).
+
+   Decisión de producto: la interfaz usa glassmorfismo (cristal esmerilado sobre luces Mulberry / Magenta / Navy / Gold)
+   y tipografías redondeadas (Nunito / Nunito Sans) en lugar de las digitales de la guía (Batota Slab / Inter),
+   por comodidad de lectura y un trato más cercano. Los colores de marca no cambian.
+   ============================================================ */
+
+/* Nunito (titulares) y Nunito Sans (texto), fuentes variables autoalojadas: no dependen de Google Fonts,
+   que el proxy corporativo puede bloquear. */
+@font-face {
+    font-family: "Nunito"; font-style: normal; font-weight: 400 900; font-display: swap;
+    src: url("../fonts/nunito-latin-ext.woff2") format("woff2");
+    unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+    font-family: "Nunito"; font-style: normal; font-weight: 400 900; font-display: swap;
+    src: url("../fonts/nunito-latin.woff2") format("woff2");
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+    font-family: "Nunito Sans"; font-style: normal; font-weight: 400 900; font-stretch: 100%; font-display: swap;
+    src: url("../fonts/nunito-sans-latin-ext.woff2") format("woff2");
+    unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+    font-family: "Nunito Sans"; font-style: normal; font-weight: 400 900; font-stretch: 100%; font-display: swap;
+    src: url("../fonts/nunito-sans-latin.woff2") format("woff2");
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+:root {
+    /* ---- Color: núcleo ---- */
+    --mulberry: #830051;
+    --magenta: #d0006f;
+    --gold: #f0ab00;
+
+    /* ---- Color: secundarios (con moderación) ---- */
+    --purple: #3c1053;
+    --navy: #003865;
+    --light-blue: #68d2df;   /* solo acento decorativo */
+    --lime: #c4d600;         /* solo acento decorativo */
+
+    /* ---- Color: neutros ---- */
+    --graphite: #3f4444;
+    /* Platinum / Light Platinum: valores aproximados; confirmar el HEX exacto en la página "Colour" de OnBrand */
+    --platinum: #e3e7e7;
+    --light-platinum: #f3f5f5;
+    --white: #ffffff;
+
+    /* ---- Glassmorfismo: superficies de cristal esmerilado sobre un fondo con luces de la paleta de marca ---- */
+    --solid: #eef1f2;                              /* superficie opaca de respaldo (sin soporte de blur / transparencia reducida) */
+    --glass: rgba(255, 255, 255, .6);              /* tarjetas */
+    --glass-strong: rgba(255, 255, 255, .8);       /* barras, modales, elementos activos */
+    --glass-soft: rgba(255, 255, 255, .38);        /* cajas internas */
+    --glass-edge: rgba(255, 255, 255, .8);         /* borde de luz */
+    --glass-blur: blur(1.25rem) saturate(1.5);
+    --sh-sm: 0 0.25rem 0.875rem rgba(63, 68, 68, .1), inset 0 1px 0 rgba(255, 255, 255, .7);
+    --sh-md: 0 0.5rem 2rem rgba(63, 68, 68, .12), inset 0 1px 0 rgba(255, 255, 255, .8);
+    --sh-lg: 0 1.5rem 4rem rgba(40, 10, 40, .3);
+    --sh-in: inset 0 2px 0.5rem rgba(63, 68, 68, .14);
+    --sh-in-sm: inset 0 1px 0.25rem rgba(63, 68, 68, .16);
+    --sh-brand: 0 0.5rem 1.25rem rgba(131, 0, 81, .38), inset 0 1px 0 rgba(255, 255, 255, .25);
+    --sh-brand-in: inset 0 2px 0.5rem rgba(0, 0, 0, .3);
+
+    /* ---- Roles semánticos ---- */
+    --bg: var(--solid);
+    --surface: var(--glass);
+    --surface-alt: var(--glass-soft);
+    --border: rgba(63, 68, 68, .12);
+    --text: var(--graphite);
+    --text-muted: #4f5757;           /* ≥ 5:1 sobre las tarjetas de cristal */
+    --heading: var(--graphite);
+    --heading-accent: var(--mulberry);
+    --link: var(--mulberry);
+    --focus: var(--navy);
+
+    /* Estados de Approval ID. El color nunca es la única señal: cada estado lleva además icono y texto. */
+    --st-vencido-bg: var(--magenta);      --st-vencido-fg: #fff;
+    --st-proximo-bg: var(--gold);         --st-proximo-fg: var(--graphite);
+    --st-vigente-bg: var(--navy);         --st-vigente-fg: #fff;
+    --st-retirado-bg: var(--purple);      --st-retirado-fg: #fff;
+    --st-revisar-bg: #d5dada;             --st-revisar-fg: var(--graphite);
+
+    --warn-bg: #f6e9c4;                   /* aviso suave basado en Gold */
+    --danger-bg: #f3d3e3;                 /* error suave basado en Magenta */
+
+    /* ---- Tipografía ---- */
+    --font-display: "Nunito", "Nunito Sans", "Segoe UI", system-ui, -apple-system, Arial, sans-serif;
+    --font-body: "Nunito Sans", "Segoe UI", system-ui, -apple-system, Arial, sans-serif;
+    --font-mono: ui-monospace, "Cascadia Mono", Consolas, "SF Mono", monospace;
+
+    --fs-xs: .78rem;
+    --fs-sm: .9rem;
+    --fs-base: 1rem;
+    --fs-lg: 1.25rem;
+    --fs-xl: 1.55rem;
+    --fs-2xl: 2.25rem;
+
+    /* ---- Espaciado (múltiplos de 4) y forma ---- */
+    --sp-1: .25rem; --sp-2: .5rem; --sp-3: .75rem; --sp-4: 1rem; --sp-5: 1.5rem; --sp-6: 2rem; --sp-7: 3rem;
+    --radius: 0.875rem;
+    --radius-lg: 1.5rem;
+    --radius-pill: 62.4375rem;
+    --shadow: var(--sh-md);
+    --app-bg: var(--solid);
+    --sidebar-w: 16rem;
+    --content-max: 130rem;
+}

@@ -1,0 +1,44 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const { mergeSummaries } = require('../server/mergeScans');
+
+const cov = (o = {}) => ({ pagesRead: 10, imagesOcr: 2, imagesByNameOnly: 1, wafBlocked: 0, partial: false, partialReasons: [], ocrAvailable: true, ocrNote: '', acceptedOverlays: [], failures: [], ...o });
+const asset = (id, status, pages, extra = {}) => ({ veevaApprovalId: id, type: 'texto', status, approvedDate: null, expirationDate: null, daysRemaining: null, note: '', assetUrl: '', pages, pagesCount: pages.length, ...extra });
+const summary = (assets, c) => ({ coverage: cov(c), assets, totalAnalyzed: assets.length, durationSeconds: 5 });
+
+test('mergeSummaries: une áreas, deduplica IDs y suma la cobertura', () => {
+    const m = mergeSummaries([
+        { label: 'Oncología', summary: summary([asset('CC-10001', 'VIGENTE', ['http://a/1']), asset('CC-10002', 'VENCIDO', ['http://a/2'])]) },
+        { label: 'CVRM', summary: summary([asset('CC-10001', 'VIGENTE', ['http://b/1'], { type: 'imagen' }), asset('SIN ID', 'SIN ID', ['http://b/2'], { assetUrl: 'v1' })], { pagesRead: 5 }) }
+    ], { scanId: 'x1' });
+    assert.equal(m.totalAnalyzed, 3);
+    assert.equal(m.vencidos, 1);
+    assert.equal(m.vigentes, 1);
+    const shared = m.assets.find(a => a.veevaApprovalId === 'CC-10001');
+    assert.deepEqual(shared.pages, ['http://a/1', 'http://b/1']);
+    assert.equal(shared.type, 'texto + imagen');
+    assert.deepEqual(shared.areas, ['Oncología', 'CVRM']);
+    assert.equal(m.pagesScanned, 15);
+    assert.equal(m.outcome, 'COMPLETO');
+    assert.deepEqual(m.assets.map(a => a.id), [1, 2, 3]);
+});
+
+test('mergeSummaries: gana la fecha de PromoMats cuando un área no la obtuvo', () => {
+    const m = mergeSummaries([
+        { label: 'A', summary: summary([asset('CC-10001', 'SIN FECHA FIABLE', ['http://a'])]) },
+        { label: 'B', summary: summary([asset('CC-10001', 'VENCIDO', ['http://b'], { expirationDate: '2020-01-01' })]) }
+    ], { scanId: 'x2' });
+    assert.equal(m.assets[0].status, 'VENCIDO');
+    assert.equal(m.sinFechaFiable, 0);
+});
+
+test('mergeSummaries: un área fallida deja el informe PARCIAL con el motivo', () => {
+    const m = mergeSummaries([
+        { label: 'A', summary: summary([asset('CC-10001', 'VIGENTE', ['http://a'])]) },
+        { label: 'B', summary: null, error: 'WAF', attempts: 2 }
+    ], { scanId: 'x3' });
+    assert.equal(m.outcome, 'PARCIAL');
+    assert.match(m.coverage.partialReasons.join(' '), /«B»/);
+    assert.deepEqual(m.coverage.areas.map(a => a.status), ['completo', 'error']);
+    assert.equal(m.coverage.areas[1].attempts, 2);
+});
