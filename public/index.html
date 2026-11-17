@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AstraZeneca | Compliance Web Scanner</title>
+    <link rel="icon" href="data:,">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="./css/styles.css?v=20">
+</head>
+<body>
+
+<header class="topbar">
+    <div class="brand">
+        <span class="brand-mark">AZ</span>
+        <div>
+            <div class="brand-title">Compliance Web Scanner</div>
+            <div class="brand-sub">Auditoría de Approval IDs de Veeva en los sitios AZMED</div>
+        </div>
+    </div>
+    <div class="topbar-right">
+        <div class="session-dots" id="session-dots" title="Estado de las cuentas"></div>
+        <span id="server-pill" class="pill pill-neutral">Conectando…</span>
+    </div>
+</header>
+
+<main class="layout">
+    <!-- ===================== Columna izquierda: configuracion ===================== -->
+    <aside class="setup">
+        <section class="card">
+            <div class="step-head">
+                <span class="step-num">1</span>
+                <div>
+                    <h2>Conecta tus cuentas</h2>
+                    <p class="hint">Se abre una ventana del navegador: inicia sesión (incluido MFA) y se guardará sola.</p>
+                </div>
+            </div>
+            <div id="sessions-list" class="sessions-list"></div>
+            <button class="btn btn-ghost btn-sm" id="btn-validate" onclick="validateSessions(false)">Comprobar estado de las cuentas</button>
+        </section>
+
+        <section class="card">
+            <div class="step-head">
+                <span class="step-num">2</span>
+                <div>
+                    <h2>Elige el sitio</h2>
+                    <p class="hint">Se revisa el sitio completo: páginas, subpáginas, PDF, imágenes y videos.</p>
+                </div>
+            </div>
+            <div class="field-row">
+                <label class="field">
+                    <span>Región</span>
+                    <select id="region-select" onchange="onRegionChange()"></select>
+                </label>
+                <label class="field">
+                    <span>País</span>
+                    <select id="country-select" onchange="onCountryChange()"></select>
+                </label>
+            </div>
+            <label class="field">
+                <span>Sitio</span>
+                <input type="text" id="target-url" spellcheck="false">
+            </label>
+            <details class="advanced">
+                <summary>Opciones avanzadas</summary>
+                <label class="field">
+                    <span>URLs adicionales (una por línea)</span>
+                    <textarea id="extra-urls" rows="3" placeholder="Micrositios o campañas que no están enlazados desde el sitio"></textarea>
+                </label>
+            </details>
+        </section>
+
+        <section class="card">
+            <div class="step-head">
+                <span class="step-num">3</span>
+                <div>
+                    <h2>Escanea</h2>
+                    <p class="hint">Un sitio completo puede tardar entre 20 y 40 minutos.</p>
+                </div>
+            </div>
+            <div id="readiness" class="readiness"></div>
+            <button id="btn-start-scan" class="btn btn-primary btn-block" onclick="requestScan(false)">Iniciar escaneo</button>
+            <div id="scan-notice" class="notice" style="display:none;"></div>
+        </section>
+    </aside>
+
+    <!-- ===================== Columna derecha: progreso y resultados ===================== -->
+    <section class="content">
+        <!-- Progreso (solo durante un escaneo) -->
+        <section id="progress-card" class="card progress-card" style="display:none;">
+            <div class="card-head">
+                <div>
+                    <h2>Escaneo en curso</h2>
+                    <p class="hint" id="progress-site"></p>
+                </div>
+                <button class="btn btn-danger-ghost btn-sm" onclick="cancelCurrentScan()">Detener (conserva lo encontrado)</button>
+            </div>
+            <ol class="stepper" id="stepper">
+                <li data-step="1"><span class="dot">1</span><span>Cuentas</span></li>
+                <li data-step="2"><span class="dot">2</span><span>Descubrir páginas</span></li>
+                <li data-step="3"><span class="dot">3</span><span>Revisar contenido</span></li>
+                <li data-step="4"><span class="dot">4</span><span>Fechas en PromoMats</span></li>
+            </ol>
+            <div class="bar"><div id="progress-bar" class="bar-fill"></div></div>
+            <div class="live-stats">
+                <div><b id="prog-elapsed">0:00</b><small>Tiempo</small></div>
+                <div><b id="prog-pages">0</b><small>Páginas revisadas</small></div>
+                <div><b id="prog-ids">0</b><small>Approval IDs encontrados</small></div>
+                <div><b id="prog-percent">0%</b><small>Avance</small></div>
+            </div>
+            <p id="progress-detail" class="activity">Preparando…</p>
+        </section>
+
+        <!-- Resultados -->
+        <section class="card">
+            <div class="card-head">
+                <div>
+                    <h2>Resultados</h2>
+                    <p class="hint" id="results-subtitle">Aún no hay resultados. Inicia un escaneo o abre uno del historial.</p>
+                </div>
+                <span id="results-badge"></span>
+            </div>
+
+            <div id="history-banner" class="banner" style="display:none;"></div>
+
+            <div class="kpis">
+                <button class="kpi kpi-danger" data-filter="VENCIDO" onclick="setStatusFilter('VENCIDO')">
+                    <span class="kpi-label">Vencidos</span><strong id="metric-vencido">0</strong><small>Retirar o renovar</small>
+                </button>
+                <button class="kpi kpi-warning" data-filter="PROXIMO A VENCER" onclick="setStatusFilter('PROXIMO A VENCER')">
+                    <span class="kpi-label">Por vencer</span><strong id="metric-prox">0</strong><small>En los próximos 60 días</small>
+                </button>
+                <button class="kpi kpi-success" data-filter="VIGENTE" onclick="setStatusFilter('VIGENTE')">
+                    <span class="kpi-label">Vigentes</span><strong id="metric-vigente">0</strong><small>Sin acción</small>
+                </button>
+                <button class="kpi kpi-neutral" data-filter="SIN FECHA" onclick="setStatusFilter('SIN FECHA')">
+                    <span class="kpi-label">Por revisar</span><strong id="metric-sinfecha">0</strong><small>Sin fecha o no encontrados</small>
+                </button>
+                <button class="kpi kpi-brand" data-filter="" onclick="setStatusFilter('')">
+                    <span class="kpi-label">Total</span><strong id="metric-total">0</strong><small>Approval IDs</small>
+                </button>
+            </div>
+
+            <div id="coverage-box" class="coverage"></div>
+
+            <div class="table-toolbar">
+                <div class="toolbar-left">
+                    <input id="filter-q" type="search" placeholder="Buscar por ID o URL…" oninput="onSearch()">
+                    <span id="assets-count" class="hint"></span>
+                    <button id="clear-filter" class="btn btn-ghost btn-sm" style="display:none;" onclick="setStatusFilter('')">Quitar filtro</button>
+                </div>
+                <div class="toolbar-right">
+                    <button class="btn btn-ghost btn-sm" onclick="exportCSV()">Exportar CSV</button>
+                    <button class="btn btn-ghost btn-sm" onclick="exportPDF()">Informe PDF</button>
+                </div>
+            </div>
+            <div class="table-wrap">
+                <table class="table">
+                    <thead><tr>
+                        <th>Estado</th><th>Approval ID</th><th>Tipo</th><th>Vence</th><th class="center">Días</th><th>Dónde aparece</th><th class="center">Págs.</th><th></th>
+                    </tr></thead>
+                    <tbody id="results-table-body"><tr><td colspan="8" class="empty">Los activos encontrados aparecerán aquí.</td></tr></tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- Historial -->
+        <section class="card">
+            <div class="card-head">
+                <div>
+                    <h2>Historial</h2>
+                    <p class="hint">Últimos 10 escaneos guardados en este equipo.</p>
+                </div>
+                <button class="btn btn-ghost btn-sm" onclick="loadScanHistory()">Actualizar</button>
+            </div>
+            <div class="table-wrap">
+                <table class="table">
+                    <thead><tr>
+                        <th>Fecha</th><th>Sitio</th><th>Resultado</th><th class="center">Págs.</th>
+                        <th class="center">Vencidos</th><th class="center">Por vencer</th><th class="center">Vigentes</th><th class="center">Por revisar</th><th></th>
+                    </tr></thead>
+                    <tbody id="history-table-body"><tr><td colspan="9" class="empty">Cargando…</td></tr></tbody>
+                </table>
+            </div>
+        </section>
+    </section>
+</main>
+
+<!-- Detalle de un activo -->
+<div id="analysis-modal" class="modal" style="display:none;" onclick="if (event.target === this) closeAnalysisModal()">
+    <div class="modal-box modal-lg">
+        <div class="card-head">
+            <div>
+                <h2 id="ana-veeva-id" class="mono">--</h2>
+                <p class="hint" id="ana-type"></p>
+            </div>
+            <button class="btn btn-ghost btn-sm" onclick="closeAnalysisModal()">Cerrar ✕</button>
+        </div>
+        <div class="detail-grid">
+            <div><small>Estado</small><span id="ana-status" class="badge">--</span></div>
+            <div><small>Aprobado</small><span id="ana-approved" class="mono">--</span></div>
+            <div><small>Vence</small><span id="ana-date" class="mono">--</span></div>
+            <div><small>Días restantes</small><span id="ana-days" class="mono">--</span></div>
+        </div>
+        <p id="ana-note" class="callout" style="display:none;"></p>
+        <div class="detail-block">
+            <small>Página</small>
+            <a id="ana-url" href="#" target="_blank" rel="noopener noreferrer" class="link wrap">--</a>
+        </div>
+        <div class="detail-block">
+            <small>Archivo / recurso</small>
+            <span id="ana-asset" class="mono wrap">--</span>
+        </div>
+        <div class="detail-block">
+            <small>Texto donde aparece</small>
+            <span id="ana-snippet" class="wrap"></span>
+        </div>
+        <details class="detail-block"><summary id="ana-pages-summary">Todas las páginas donde aparece</summary><ul id="ana-pages" class="url-list"></ul></details>
+        <div class="evidence" id="ana-preview-container"></div>
+
+        <div class="review">
+            <strong>¿La detección es correcta?</strong>
+            <div class="btn-row">
+                <button class="btn btn-success btn-sm" onclick="submitReview('correcta')">✔ Sí, es correcta</button>
+                <button class="btn btn-danger btn-sm" onclick="submitReview('incorrecta')">✖ No, es incorrecta</button>
+                <button class="btn btn-ghost btn-sm" onclick="registerMissed()">+ Reportar un ID que no se detectó</button>
+            </div>
+            <div class="field-row">
+                <input id="rev-corrected-id" placeholder="ID correcto (opcional)">
+                <input id="rev-corrected-date" type="date" title="Fecha correcta (opcional)">
+            </div>
+            <input id="rev-notes" placeholder="Notas (opcional)">
+            <p id="rev-msg" class="hint"></p>
+            <p id="precision-box" class="hint mono"></p>
+        </div>
+    </div>
+</div>
+
+<div id="toast" class="toast" style="display:none;"></div>
+
+<script src="./js/app.js?v=20"></script>
+</body>
+</html>
