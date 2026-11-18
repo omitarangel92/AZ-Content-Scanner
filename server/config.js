@@ -28,7 +28,7 @@ module.exports = {
     extraHosts: list(process.env.ALLOWED_HOSTS),
     // Endpoints de diagnóstico (/api/vault/inspect, /api/capture-test): desactivados salvo que se pidan
     enableDiagnostics: process.env.ENABLE_DIAGNOSTICS === 'true',
-    warningDays: parseInt(process.env.WARNING_DAYS || '60', 10),
+    warningDays: parseInt(process.env.WARNING_DAYS || '30', 10),
     // Orden de día/mes en fechas ambiguas de PromoMats (03/04/2026): 'dmy' (por defecto) o 'mdy'
     vaultDateFormat: process.env.VAULT_DATE_FORMAT === 'mdy' ? 'mdy' : 'dmy',
     maxPages: parseInt(process.env.MAX_PAGES || '800', 10),

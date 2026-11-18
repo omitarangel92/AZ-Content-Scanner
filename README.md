@@ -83,7 +83,7 @@ Ver `.env.example`. Las más relevantes:
 | :--- | :--- |
 | `ALLOWED_DOMAINS` | Dominios que se pueden escanear. |
 | `VAULT_HOST` | Host de PromoMats (requerido para obtener fechas). |
-| `WARNING_DAYS` | Días para considerar "por vencer" (60). |
+| `WARNING_DAYS` | Días para considerar "por vencer" (30). |
 | `MAX_PAGES`, `MAX_DEPTH`, `CRAWL_CONCURRENCY`, `VAULT_CONCURRENCY` | Alcance y paralelismo. Si el WAF bloquea páginas, baja `CRAWL_CONCURRENCY`. |
 | `OCR_ENABLED`, `OCR_WORKERS`, `MAX_OCR_IMAGES_PER_PAGE` | OCR de imágenes. |
 | `VAULT_DATE_FORMAT` | `dmy` (por defecto) o `mdy` para fechas ambiguas. |

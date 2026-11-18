@@ -680,11 +680,15 @@ function applyLive(l) {
     $('metric-vencido').textContent = b.vencidos;
     $('metric-prox').textContent = b.proximos;
     $('metric-vigente').textContent = b.vigentes;
-    $('metric-retirado').textContent = b.retirados;
-    $('metric-sinfecha').textContent = b.sinFecha;
+$('metric-sinfecha').textContent = b.sinFecha;
     $('metric-total').textContent = b.total;
     renderInsights(b, []);
 }
+
+let scanClockStart = null, scanClockTimer = null;   // reloj del escaneo: avanza cada segundo, no solo cuando llega un evento
+function tickClock() { if (scanClockStart) $('prog-elapsed').textContent = fmtElapsed(Math.floor((Date.now() - scanClockStart) / 1000)); }
+function startClock() { clearInterval(scanClockTimer); scanClockTimer = setInterval(tickClock, 1000); }
+function stopClock() { clearInterval(scanClockTimer); scanClockTimer = null; }
 
 let finishedAt = 0;   // cuándo terminó el último escaneo (evita re-enganchar el progreso mientras el servidor guarda)
 
@@ -695,6 +699,7 @@ function attachProgress() {
     renderLiveEmpty();
     $('progress-site').textContent = progressAreasText ? `${$('target-url').value} · ${progressAreasText}` : $('target-url').value;
     resetProgress();
+    startClock();
     setServerPill('busy', 'Escaneando…');
     updateStartState();
 
@@ -726,6 +731,7 @@ function finishProgress(d) {
     if (scanFinished) return;
     scanFinished = true;
     finishedAt = Date.now();
+    tickClock(); stopClock();
     clearInterval(progressPoll);
     if (activeEventSource) { activeEventSource.close(); activeEventSource = null; }
     setTimeout(async () => {
@@ -757,6 +763,7 @@ function resetProgress() {
     document.querySelectorAll('#stepper li').forEach(li => { li.className = ''; li.querySelector('.dot').textContent = li.dataset.step; });
     $('progress-bar').style.width = '0%';
     $('progress-track').setAttribute('aria-valuenow', '0');
+    scanClockStart = null;
     $('prog-elapsed').textContent = '0:00';
     $('prog-pages').textContent = '0';
     $('prog-ids').textContent = '0';
@@ -771,7 +778,12 @@ function updateProgressUI(d) {
         $('prog-percent').textContent = `${d.progress}%`;
     }
     if (d.status) $('progress-detail').textContent = d.status;
-    if (d.elapsed !== undefined) $('prog-elapsed').textContent = fmtElapsed(d.elapsed);
+    if (d.elapsed !== undefined) {
+        // El servidor da el tiempo transcurrido; se conserva el inicio más antiguo (en cola cada área reinicia su cuenta)
+        const start = Date.now() - d.elapsed * 1000;
+        if (!scanClockStart || start < scanClockStart) scanClockStart = start;
+        tickClock();
+    }
     if (d.pagesRead !== undefined) $('prog-pages').textContent = d.pagesRead;
     if (d.idsFound !== undefined) $('prog-ids').textContent = d.idsFound;
     if (d.live) applyLive(d.live);
@@ -807,8 +819,7 @@ function renderScan(scan, fromHistory) {
     $('metric-vencido').textContent = b.vencidos;
     $('metric-prox').textContent = b.proximos;
     $('metric-vigente').textContent = b.vigentes;
-    $('metric-retirado').textContent = b.retirados;
-    $('metric-sinfecha').textContent = b.sinFecha;
+$('metric-sinfecha').textContent = b.sinFecha;
     $('metric-total').textContent = b.total;
 
     $('results-subtitle').textContent = `${scan.targetUrl} · ${new Date(scan.date).toLocaleString()}${scan.sections && scan.sections.length ? ` · Áreas: ${scan.sections.join(', ')}` : ''}`;
