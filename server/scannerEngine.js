@@ -5,7 +5,7 @@ const ocr = require('./ocrService');
 const storage = require('./storage');
 const config = require('./config');
 const { isLoginUrl, isIdpHost } = require('./loginDetect');
-const { sectionsFromSitemap, extractHeaderNav, buildSections, inSections } = require('./sections');
+const { sectionsFromSitemap, extractHeaderNav, buildSections, inSections, aliasSectionsFor } = require('./sections');
 
 const ID_RE = () => config.idRe();
 const PDF_EXT = /\.pdf$/i;
@@ -884,13 +884,14 @@ class ScannerEngine {
             // Por áreas también se siguen las páginas (y subdominios) a las que enlaza el CONTENIDO del área aunque cuelguen
             // de otra ruta; hasta MAX_HOPS saltos fuera de la ruta. Los enlaces del menú/pie no cuentan (llevarían a todo el sitio).
             const MAX_HOPS = 2;
+            const alias = sectionMode ? aliasSectionsFor(sections) : { prefixes: [], seeds: [] };
             const enqueue = (raw, depth, referrer, fromSitemap, explicit, hop = 0, viaContent = false) => {
                 const c = this.canonicalize(raw);
                 if (!c || !this.isInScope(c, baseDomain)) return;
                 // La página "Mi cuenta" es la sonda fiable para comprobar la sesión de AzMed
                 if (authManager.isAccountUrl(c)) authManager.rememberProtectedUrl(baseDomain, c);
                 let nextHop = 0;
-                if (sectionMode && !explicit && !inSections(c, sections)) {
+                if (sectionMode && !explicit && !inSections(c, sections) && !inSections(c, alias.prefixes)) {
                     if (!viaContent || fromSitemap || hop >= MAX_HOPS || BOILERPLATE.test(new URL(c).pathname)) { noteOutOfScope(c); return; }
                     nextHop = hop + 1;
                 }
@@ -901,7 +902,10 @@ class ScannerEngine {
                 (fromSitemap ? sitemapQueue : queue).push({ url: c, depth, fromSitemap: !!fromSitemap, hop: nextHop });
             };
             // Por áreas se siembra la raíz de cada área; si no, la URL del sitio
-            if (sectionMode) sections.forEach(s => enqueue(s.url, 0, null, false, true));
+            if (sectionMode) {
+                sections.forEach(s => enqueue(s.url, 0, null, false, true));
+                alias.seeds.forEach(u => enqueue(u, 0, null, false, true));   // rutas propias del área con otro prefijo
+            }
             else enqueue(targetUrl, 0);
             // Subdominios de crt.sh: baja prioridad (como los sitemaps) y sin hosts de infraestructura
             subs.filter(s => !INFRA_HOST.test(new URL(s).hostname.replace(new RegExp(`\\.?${baseDomain.replace(/\./g, '\\.')}$`), '')))

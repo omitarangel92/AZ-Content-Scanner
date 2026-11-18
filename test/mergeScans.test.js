@@ -47,9 +47,9 @@ test('mergeSummaries: «fuera de las áreas» une las listas y quita lo que otra
     const sections = [{ label: 'Oncología', url: 'https://x.cr/es/home/oncologia.html' }, { label: 'CVRM', url: 'https://x.cr/es/home/cvrm.html' }];
     const m = mergeSummaries([
         { label: 'Oncología', summary: summary([asset('CC-10001', 'VIGENTE', ['http://a'])], { outOfScope: ['https://x.cr/es/home/cvrm/cardio.html', 'https://x.cr/es/home/Synagis.html'] }) },
-        { label: 'CVRM', summary: summary([asset('CC-10002', 'VIGENTE', ['http://b'])], { outOfScope: ['https://x.cr/es/home/Synagis.html', 'https://x.cr/es/home/mismo-cancer.html'] }) }
+        { label: 'CVRM', summary: summary([asset('CC-10002', 'VIGENTE', ['http://b'])], { outOfScope: ['https://x.cr/es/home/Synagis.html', 'https://x.cr/es/home/otra-pagina.html'] }) }
     ], { scanId: 'x4', sections });
-    assert.deepEqual(m.coverage.outOfScope.sort(), ['https://x.cr/es/home/Synagis.html', 'https://x.cr/es/home/mismo-cancer.html']);
+    assert.deepEqual(m.coverage.outOfScope.sort(), ['https://x.cr/es/home/Synagis.html', 'https://x.cr/es/home/otra-pagina.html']);
 });
 
 test('mergeSummaries: los videos «NO VERIFICADO» se deduplican y cuentan como por revisar, no como «SIN ID»', () => {

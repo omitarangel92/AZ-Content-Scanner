@@ -283,4 +283,43 @@ function sectionsFromSitemap(urls, limit = 20) {
         });
 }
 
-module.exports = { sectionsFromSitemap, extractHeaderNav, normPath, isHomeLike, inSections, buildSections, HOME_LABEL };
+// Rutas que pertenecen a un área aunque no cuelguen de su carpeta (azmed.cr): se escanean siempre al elegir el área.
+// `match` se compara con el último segmento de la ruta del área (o su etiqueta); `paths` son prefijos relativos a /es/home;
+// `seeds` son páginas concretas que se siembran en la cola.
+const AREA_ALIASES = [
+    { name: 'Raras', match: /rare-?disease|enfermedades[-_ ]?raras|raras/i,
+      paths: ['enfermedades_raras'],
+      seeds: ['enfermedades_raras/micrositio_ultomiris', 'enfermedades_raras/micrositio_calculadoras', 'enfermedades_raras/Micrositio_Recursos',
+          'enfermedades_raras/dosingtesting', 'enfermedades_raras/Patologia_hnp', 'enfermedades_raras/Patologia_SHUa',
+          'enfermedades_raras/Patologia_MGg', 'enfermedades_raras/plasmic-score-calculator'] },
+    { name: 'Respiratorio', match: /respirator/i,
+      paths: ['epoc-bajo-control', 'azeventos/respiratorio', 'respiratorio/PulmON_Healthy_Lungs', 'contenido/respiratorio'],
+      seeds: ['epoc-bajo-control/test-puma', 'contenido/respiratorio'] },
+    { name: 'Oncología', match: /oncolog/i,
+      paths: ['mismo-cancer', 'azeventos/oncologia', 'contenido/oncologia'], seeds: ['mismo-cancer', 'contenido/oncologia'] },
+    { name: 'Inmunología', match: /inmunolog/i,
+      paths: ['Synagis', 'saphnelo-home'], seeds: ['Synagis', 'saphnelo-home'] },
+    { name: 'CVRM', match: /^cvrm$|cardio/i,
+      paths: ['falla-cardiaca', 'contenido/cvrm'], seeds: ['contenido/cvrm'] }
+];
+
+// Devuelve, para las áreas elegidas, los prefijos extra ({url}) y las páginas semilla ({url}) que les corresponden.
+function aliasSectionsFor(sections) {
+    const prefixes = [], seeds = [], used = new Set();
+    for (const s of sections) {
+        if (!s.url || s.exact) continue;
+        const p = normPath(s.scope || s.url);
+        if (!p) continue;
+        const last = p.split('/').filter(Boolean).pop() || '';
+        let origin; try { origin = new URL(s.url).origin; } catch (e) { continue; }
+        for (const a of AREA_ALIASES) {
+            if (used.has(a.name + origin) || !(a.match.test(last) || a.match.test(String(s.label || '').trim()))) continue;
+            used.add(a.name + origin);
+            a.paths.forEach(x => prefixes.push({ url: `${origin}/es/home/${x}.html` }));
+            a.seeds.forEach(x => seeds.push(`${origin}/es/home/${x}.html`));
+        }
+    }
+    return { prefixes, seeds };
+}
+
+module.exports = { aliasSectionsFor, AREA_ALIASES, sectionsFromSitemap, extractHeaderNav, normPath, isHomeLike, inSections, buildSections, HOME_LABEL };

@@ -1,7 +1,7 @@
 // Cola de áreas: une los resúmenes de varios escaneos (uno por área) en un único informe consolidado.
 // Lógica pura, sin dependencias del motor.
 
-const { inSections } = require('./sections');
+const { inSections, aliasSectionsFor } = require('./sections');
 
 const UNRESOLVED = new Set(['SIN FECHA FIABLE', 'ID NO ENCONTRADO']);
 const CAP = 300;
@@ -55,7 +55,7 @@ function mergeSummaries(parts, { scanId, durationSeconds, sections } = {}) {
 
     // Páginas fuera de las áreas: se unen las de todos los escaneos y se quitan las que otra área elegida sí cubre
     coverage.outOfScope = [...new Set(done.flatMap(p => p.summary.coverage.outOfScope || []))]
-        .filter(u => !sections || !inSections(u, sections)).slice(0, 300);
+        .filter(u => !sections || !(inSections(u, sections) || inSections(u, aliasSectionsFor(sections).prefixes))).slice(0, 300);
 
     const overlays = new Map();
     for (const p of done) for (const o of p.summary.coverage.acceptedOverlays || []) overlays.set(o.text, (overlays.get(o.text) || 0) + o.times);
