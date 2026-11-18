@@ -21,12 +21,14 @@ inp.addEventListener('keydown', (e) => {
   if (e.key !== 'Enter') return;
   LAST = inp.value.replace(/"/g, '');
   const out = document.getElementById('out');
-  if (MODE === 'results') out.innerHTML = '<h3>Resultados: "' + LAST + '"</h3><div class="row"><a href="#doc_info/1/2/3">Documento (v1.0)</a> ' + LAST + '</div>';
+  if (MODE === 'results' || MODE.indexOf('noexp') === 0) out.innerHTML = '<h3>Resultados: "' + LAST + '"</h3><div class="row"><a href="#doc_info/1/2/3">Documento (v1.0)</a> ' + LAST + '</div>';
   else if (MODE === 'none') out.innerHTML = '<p>No results for "' + LAST + '"</p>';
 });
 function show() {
   if (location.hash.indexOf('#doc_info') === 0) {
-    document.body.innerHTML = '<div>Document Number</div><div>' + LAST + '</div><div>Key Dates</div><div>Expiration Date</div><div>15/03/2099</div>';
+    const dates = MODE.indexOf('noexp') === 0 ? '' : '<div>Expiration Date</div><div>15/03/2099</div>';
+    const state = MODE === 'noexp' ? '<div>Status</div><div>Approved</div>' : MODE === 'noexpdraft' ? '<div>Status</div><div>Draft</div>' : '';
+    document.body.innerHTML = '<div>Document Number</div><div>' + LAST + '</div>' + state + '<div>Key Dates</div>' + dates;
   }
 }
 window.addEventListener('hashchange', show);
@@ -79,4 +81,20 @@ test('sesión caducada (redirige al login): se corta y las consultas siguientes 
     assert.equal(r.status, 'SIN FECHA FIABLE');
     assert.match(r.note, /caducó/);
     assert.equal(vaultClient.sessionDead, true);
+});
+
+test('aprobado SIN fecha de vencimiento: cuenta como VIGENTE (material que no caduca)', async (t) => {
+    if (!chromium) return t.skip('playwright no disponible');
+    const r = await withVault('noexp', (page) => vaultClient.lookupOne(page, 'CC-12345'));
+    assert.equal(r.status, 'VIGENTE');
+    assert.equal(r.noExpiry, true);
+    assert.equal(r.expirationDate, null);
+    assert.match(r.note, /sin fecha de vencimiento/i);
+});
+
+test('borrador SIN fecha de vencimiento: sigue en «Por revisar» y la nota dice el estado', async (t) => {
+    if (!chromium) return t.skip('playwright no disponible');
+    const r = await withVault('noexpdraft', (page) => vaultClient.lookupOne(page, 'CC-12345'));
+    assert.equal(r.status, 'SIN FECHA FIABLE');
+    assert.match(r.note, /estado: Draft/);
 });

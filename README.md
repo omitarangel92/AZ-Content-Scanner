@@ -76,6 +76,17 @@ Sesiones ─> Descubrimiento ─> Rastreo y extracción ─> Fechas en PromoMats
 
 ---
 
+### Cómo se clasifica cada Approval ID
+Cada ID se cuenta **una sola vez** (aunque aparezca en cientos de páginas) y se consulta en PromoMats (ficha → *Key Dates*):
+
+| Estado | Regla |
+|---|---|
+| **Vencido** | Fecha de vencimiento anterior a hoy. |
+| **Por vencer** | Vence en los próximos `WARNING_DAYS` días (30). |
+| **Vigente** | Vence después de ese plazo, **o está aprobado y no tiene fecha de vencimiento** (material que no caduca; se muestra «Sin vencimiento»). |
+| **Retirado** | Estado Retired/Obsolete en PromoMats. |
+| **Por revisar** | No llegó a una fecha: no encontrado en PromoMats, PromoMats no respondió, ficha sin fecha y sin estado aprobado (borrador/en revisión), o videos sin ID/sin verificar. El panel desglosa el motivo. |
+
 ## 3. Configuración (`.env`)
 
 Ver `.env.example`. Las más relevantes:

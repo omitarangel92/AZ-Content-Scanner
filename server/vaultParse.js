@@ -75,4 +75,10 @@ function isRetired(value, retiredValues = config.vaultLabels.retiredValues) {
     return !!t && retiredValues.some(v => t === v || t.startsWith(v + ' '));
 }
 
-module.exports = { MONTHS, parseDate, toIso, todayUtc, daysRemaining, classify, lifecycleState, isRetired };
+// ¿El estado del documento es «aprobado»? Igual que isRetired: coincidencia exacta o por prefijo, sin mayúsculas
+function isApproved(value, approvedValues = config.vaultLabels.approvedValues) {
+    const t = String(value || '').trim().toLowerCase();
+    return !!t && approvedValues.some(v => t === v || t.startsWith(v + ' '));
+}
+
+module.exports = { MONTHS, parseDate, toIso, todayUtc, daysRemaining, classify, lifecycleState, isRetired, isApproved };

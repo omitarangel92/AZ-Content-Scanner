@@ -4,7 +4,7 @@ const authManager = require('./authManager');
 const config = require('./config');
 const { atomicWriteSync } = require('./fsutil');
 
-const { parseDate, toIso, todayUtc, daysRemaining, classify, lifecycleState, isRetired } = require('./vaultParse');
+const { parseDate, toIso, todayUtc, daysRemaining, classify, lifecycleState, isRetired, isApproved } = require('./vaultParse');
 
 const SEARCH_INPUT_SELECTORS = [
     'input[placeholder*="Search" i]',
@@ -81,9 +81,9 @@ class VaultClient {
     }
 
     rememberResult(id, r) {
-        if (!config.vaultCacheHours || !r || !r.expirationDate) return;
+        if (!config.vaultCacheHours || !r || (!r.expirationDate && !r.noExpiry)) return;
         if (!['VENCIDO', 'PROXIMO A VENCER', 'VIGENTE', 'RETIRADO'].includes(r.status)) return;
-        this.diskCache.set(id, { at: Date.now(), r: { status: r.status, approvedDate: r.approvedDate, expirationDate: r.expirationDate, daysRemaining: r.daysRemaining, note: '' } });
+        this.diskCache.set(id, { at: Date.now(), r: { status: r.status, approvedDate: r.approvedDate, expirationDate: r.expirationDate, daysRemaining: r.daysRemaining, noExpiry: !!r.noExpiry, note: '' } });
         this.diskDirty = true;
     }
 
@@ -507,12 +507,21 @@ class VaultClient {
                 };
             }
             if (!expiration) {
+                const state = this.lifecycleState(text);
+                // Aprobado y sin fecha de vencimiento = material que no caduca: cuenta como vigente (antes caía en «Por revisar»)
+                // (si el campo no existe, la sección de fechas no «se abre»: basta con ver Key Dates o la fecha de aprobación)
+                if (isApproved(state) && (res.trace.keyDatesOpen || approved || /Key Dates/i.test(text))) {
+                    return {
+                        status: 'VIGENTE', approvedDate: toIso(approved), expirationDate: null, daysRemaining: null,
+                        noExpiry: true, note: `Aprobado, sin fecha de vencimiento en PromoMats (estado: ${state})`
+                    };
+                }
                 return {
                     status: 'SIN FECHA FIABLE', approvedDate: toIso(approved), expirationDate: null,
                     daysRemaining: null,
-                    note: res.trace.keyDatesOpen
+                    note: (res.trace.keyDatesOpen
                         ? 'La ficha no muestra fecha de vencimiento legible'
-                        : 'No se pudo desplegar la sección Key Dates',
+                        : 'No se pudo desplegar la sección Key Dates') + (state ? ` (estado: ${state})` : ''),
                     transient: !res.trace.keyDatesOpen
                 };
             }

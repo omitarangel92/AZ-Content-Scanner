@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { parseDate, toIso, daysRemaining, classify, lifecycleState, isRetired } = require('../server/vaultParse');
+const { parseDate, toIso, daysRemaining, classify, lifecycleState, isRetired, isApproved } = require('../server/vaultParse');
 
 const iso = (s, fmt) => toIso(parseDate(s, fmt));
 
@@ -68,4 +68,14 @@ test('isRetired: solo valores de ciclo de vida retirados', () => {
     assert.equal(isRetired('Approved for Distribution'), false);
     assert.equal(isRetired('Not retired yet'), false);
     assert.equal(isRetired(''), false);
+});
+
+test('isApproved: estados «aprobado» (con variantes), no borradores ni retirados', () => {
+    assert.equal(isApproved('Approved'), true);
+    assert.equal(isApproved('Approved for Distribution'), true);
+    assert.equal(isApproved('Aprobado'), true);
+    assert.equal(isApproved('Draft'), false);
+    assert.equal(isApproved('In Review'), false);
+    assert.equal(isApproved('Retired'), false);
+    assert.equal(isApproved(''), false);
 });

@@ -110,6 +110,8 @@ module.exports = {
     vaultLabels: {
         approved: ['Approved for Distribution Date', 'Fecha de Aprobación para Distribución'],
         expiration: ['Expiration Date', 'Fecha de Vencimiento', 'Fecha de Expiración'],
-        retiredValues: ['retired', 'obsolete', 'superseded', 'withdrawn', 'retirado', 'obsoleto']
+        retiredValues: ['retired', 'obsolete', 'superseded', 'withdrawn', 'retirado', 'obsoleto'],
+        // Estados que significan «aprobado y en uso»: sin fecha de vencimiento cuentan como vigentes (material que no caduca)
+        approvedValues: ['approved', 'approved for distribution', 'approved for use', 'final', 'effective', 'steady state', 'aprobado', 'aprovado', 'vigente']
     }
 };

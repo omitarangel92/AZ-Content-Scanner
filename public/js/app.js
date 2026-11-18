@@ -917,9 +917,32 @@ $('metric-sinfecha').textContent = b.sinFecha;
     sel.value = types.includes(view.type) ? view.type : '';
     view.type = sel.value;
 
+    renderReviewBreakdown(scan.assets || []);
     renderInsights(b, scan.assets);
     if (mode === 'overview') $('coverage-box').innerHTML = ''; else renderCoverage(scan);   // la cobertura es de cada escaneo
     renderAssetsTable();
+}
+
+// «Por revisar»: por qué cada ID no llegó a vigente/vencido (para auditarlo de un vistazo)
+function reviewBreakdown(assets) {
+    const n = {};
+    const add = (k) => { n[k] = (n[k] || 0) + 1; };
+    for (const a of assets) {
+        if (a.status === 'ID NO ENCONTRADO') add('no encontrados en PromoMats');
+        else if (a.status === 'SIN FECHA FIABLE') {
+            if (/no respondi|tiempo|cuadro de b[uú]squeda|abrir la ficha|ficha abierta|sesi[oó]n|Key Dates|Error consultando|No se consult|Not Found/i.test(a.note || '')) add('PromoMats no respondió');
+            else add('sin fecha de vencimiento y sin estado aprobado');
+        } else if (a.status === 'SIN ID') add('materiales sin Approval ID');
+        else if (a.status === 'NO VERIFICADO') add('videos sin verificar');
+    }
+    return n;
+}
+function renderReviewBreakdown(assets) {
+    const el = $('review-breakdown');
+    const n = reviewBreakdown(assets);
+    const parts = Object.entries(n).map(([k, v]) => `${v} ${k}`);
+    el.hidden = !parts.length;
+    el.textContent = parts.length ? `Por revisar: ${parts.join(' · ')}.` : '';
 }
 
 function closeHistoryDetail() { historyScan = null; mountAndRender(); }
@@ -1118,8 +1141,8 @@ function renderAssetsTable() {
             <td data-label="Estado"><span class="badge ${badgeClass(a.status)}" title="${esc(a.status)}">${esc(shortStatus(a.status))}</span></td>
             <td data-label="Approval ID" class="mono id nowrap">${esc(a.veevaApprovalId)}</td>
             <td data-label="Tipo" class="nowrap">${esc(a.type)}</td>
-            <td data-label="Vence" class="mono nowrap">${esc(fmtDate(a.expirationDate))}</td>
-            <td data-label="Días" class="mono center">${esc(fmtDays(a.daysRemaining))}</td>
+            <td data-label="Vence" class="mono nowrap">${esc(a.noExpiry ? 'Sin vencimiento' : fmtDate(a.expirationDate))}</td>
+            <td data-label="Días" class="mono center">${esc(a.noExpiry ? '—' : fmtDays(a.daysRemaining))}</td>
             <td data-label="Dónde aparece" class="url-cell" title="${esc(a.location)}">${esc(a.location)}</td>
             <td data-label="Páginas" class="mono center">${esc(a.pagesCount)}</td>
             <td class="right"><button class="btn btn-ghost btn-sm" onclick="viewAnalysis(${i}, this)" aria-label="Ver detalle de ${esc(a.veevaApprovalId)}">Detalle</button></td>
@@ -1140,8 +1163,8 @@ async function viewAnalysis(index, opener) {
     $('ana-veeva-id').textContent = a.veevaApprovalId;
     $('ana-type').textContent = a.type || '';
     $('ana-approved').textContent = fmtDate(a.approvedDate);
-    $('ana-date').textContent = fmtDate(a.expirationDate);
-    $('ana-days').textContent = fmtDays(a.daysRemaining);
+    $('ana-date').textContent = a.noExpiry ? 'Sin vencimiento' : fmtDate(a.expirationDate);
+    $('ana-days').textContent = a.noExpiry ? '—' : fmtDays(a.daysRemaining);
     const note = $('ana-note');
     note.textContent = a.note || '';
     note.hidden = !a.note;
@@ -1323,7 +1346,7 @@ function exportCSV() {
     if (!scan || !scan.assets.length) { toast('No hay datos para exportar.', 'err'); return; }
     const header = ['Estado', 'Región', 'País', 'Approval ID', 'Tipo', 'Aprobación', 'Vencimiento', 'Días restantes', 'URL página', 'URL activo', 'Páginas que lo muestran', 'Todas las páginas', 'Nota', 'Evidencia textual'];
     const rows = scan.assets.map(a => [
-        a.status, a.region, a.country, a.veevaApprovalId, a.type, a.approvedDate || '', a.expirationDate || '',
+        a.status, a.region, a.country, a.veevaApprovalId, a.type, a.approvedDate || '', a.expirationDate || (a.noExpiry ? 'Sin vencimiento' : ''),
         a.daysRemaining ?? '', a.location, a.assetUrl || '', a.pagesCount, (a.pages || []).join(' | '), a.note || '', a.snippet || ''
     ]);
     const csv = AZCsv.buildCsv(header, rows);

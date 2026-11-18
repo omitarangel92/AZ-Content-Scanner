@@ -737,6 +737,7 @@ class ScannerEngine {
                     status: v.status,
                     approvedDate: v.approvedDate,
                     expirationDate: v.expirationDate,
+                    noExpiry: !!v.noExpiry,
                     daysRemaining: v.daysRemaining,
                     note: v.note,
                     location: pageList[0],
