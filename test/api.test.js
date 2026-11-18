@@ -145,6 +145,22 @@ test('solo estas URLs: exige al menos una URL válida del dominio; con una, sigu
     assert.equal(ok.json.sessionExpired, true);
 });
 
+test('historial: resumen acumulado vacío, borrado individual (inexistente/ inválido) y borrado total', async () => {
+    const ov = await request('GET', '/api/overview');
+    assert.equal(ov.status, 200);
+    assert.equal(ov.json.scans, 0);
+    assert.equal(ov.json.overview.totalAnalyzed, 0);
+    const h = await request('GET', '/api/history');
+    assert.equal(typeof h.json.storageBytes, 'number');
+    assert.equal((await post('/api/history/nope/delete', {})).status, 404);
+    assert.equal((await post('/api/history/__proto__!/delete', {})).status, 400);
+    const sinToken = await request('POST', '/api/history/clear', { headers: { 'Content-Type': 'application/json' }, body: {} });
+    assert.equal(sinToken.status, 403);
+    const clear = await post('/api/history/clear', {});
+    assert.equal(clear.status, 200);
+    assert.equal(clear.json.removed, 0);
+});
+
 test('diagnósticos desactivados por defecto', async () => {
     assert.equal((await request('GET', '/api/vault/inspect/CC-14803')).status, 404);
     assert.equal((await request('GET', '/api/capture-test?url=https://www.azmed.cr')).status, 404);

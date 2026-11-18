@@ -98,4 +98,20 @@ function mergeSummaries(parts, { scanId, durationSeconds, sections } = {}) {
     };
 }
 
-module.exports = { mergeSummaries };
+// Resumen acumulado de TODOS los escaneos guardados (Panel). `history` viene del más reciente al más antiguo: como
+// mergeSummaries conserva la primera aparición de cada ID, gana el resultado más reciente. Cada fila recuerda de qué
+// escaneo viene (fromScanId) para poder abrir su detalle y sus revisiones.
+function aggregateHistory(history) {
+    const parts = (history || []).filter(s => s && Array.isArray(s.assets)).map(s => ({
+        label: s.scanId,
+        summary: {
+            ...s,
+            coverage: s.coverage || {},
+            assets: s.assets.map(a => ({ ...a, fromScanId: s.scanId }))
+        }
+    }));
+    const merged = mergeSummaries(parts, { scanId: '_overview' });
+    return { ...merged, aggregate: true, scansCount: parts.length, queue: false, sections: null, targetUrl: '', date: new Date().toISOString() };
+}
+
+module.exports = { mergeSummaries, aggregateHistory };

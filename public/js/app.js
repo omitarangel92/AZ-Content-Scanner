@@ -6,7 +6,9 @@
 
 let CONFIG = null;
 let shownScan = null;          // escaneo que se está mostrando (último o del historial)
-let latestScan = null;         // último escaneo del servidor
+let latestScan = null;         // último escaneo guardado en el servidor
+let currentScan = null;        // escaneo hecho desde que se abrió la app (se muestra en «Nuevo escaneo» hasta que se lance otro)
+let historyScan = null;        // escaneo abierto desde el Historial
 let activeEventSource = null;
 let sessionStates = {};
 let pendingLogin = new Set();  // servicios con ventana de login abierta
@@ -137,6 +139,37 @@ function showView() {
     document.title = `${VIEWS[name]} · AZ Content Scanner`;
     window.scrollTo({ top: 0 });
     if (name === 'history') loadScanHistory();
+    mountAndRender();
+}
+
+// El mismo bloque de resultados (indicadores, gráficos, cobertura y tabla) se reubica en la vista activa:
+// Panel = acumulado de todo lo escaneado · Nuevo escaneo = el escaneo actual · Historial = el escaneo abierto
+let renderToken = 0;
+async function mountAndRender() {
+    const name = currentView();
+    const block = $('results-block');
+    const host = document.querySelector(`.results-host[data-host="${name}"]`);
+    if (!host) return;
+    if (block.parentElement !== host) host.appendChild(block);
+    const token = ++renderToken;
+    const empty = $('scan-empty');
+    if (name === 'dashboard') {
+        block.hidden = false;
+        try {
+            const { json } = await api('/api/overview');
+            if (token !== renderToken) return;
+            renderScan(json.overview || { assets: [], scansCount: 0, aggregate: true }, 'overview');
+        } catch (e) { toast('No se pudo cargar el resumen del Panel.', 'err'); }
+    } else if (name === 'scan') {
+        const show = scanRunning || !!currentScan;
+        block.hidden = !show;
+        empty.hidden = show;
+        if (scanRunning) { if (!shownScan || !shownScan.live) renderLiveEmpty(); }
+        else if (currentScan) renderScan(currentScan, 'scan');
+    } else if (name === 'history') {
+        block.hidden = !historyScan;
+        if (historyScan) renderScan(historyScan, 'history');
+    }
 }
 function goTo(name) { location.hash = `#/${name}`; }
 
@@ -665,8 +698,9 @@ async function requestScan() {
             return;
         }
         setNotice(json.warning || '', false);
-        attachProgress();
-        goTo('dashboard');   // el progreso y, al terminar, los resultados se ven en el panel
+        attachProgress();   // el progreso y, al terminar, el resultado se ven en esta misma vista (debajo del paso 3)
+        mountAndRender();
+        setTimeout(() => { const h = $('progress-card'); if (h && !h.hidden) h.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 100);
     } catch (e) {
         setNotice('Error de conexión con el servidor.', true);
     } finally {
@@ -681,7 +715,7 @@ async function requestScan() {
 // el anterior. Los escaneos anteriores siguen disponibles en la pestaña Historial.
 function renderLiveEmpty() {
     const url = $('target-url').value;
-    renderScan({ scanId: '_live', live: true, assets: [], targetUrl: url, date: new Date().toISOString(), sections: null, outcome: '' }, false);
+    renderScan({ scanId: '_live', live: true, assets: [], targetUrl: url, date: new Date().toISOString(), sections: null, outcome: '' }, 'live');
     $('last-scan-meta').textContent = 'Escaneo en curso';
     $('results-subtitle').textContent = `${url}${progressAreasText ? ` · ${progressAreasText}` : ''} · los resultados aparecen al terminar`;
     $('results-badge').innerHTML = '<span class="badge badge-info">EN CURSO</span>';
@@ -711,12 +745,13 @@ function attachProgress() {
     scanFinished = false;
     $('progress-card').hidden = false;
     scanRunning = true;
-    renderLiveEmpty();
+    shownScan = null;   // fuerza a pintar el escaneo en curso si se está en «Nuevo escaneo»
     $('progress-site').textContent = progressAreasText ? `${$('target-url').value} · ${progressAreasText}` : $('target-url').value;
     resetProgress();
     startClock();
     setServerPill('busy', 'Escaneando…');
     updateStartState();
+    if (currentView() === 'scan') mountAndRender();
 
     if (activeEventSource) activeEventSource.close();
     activeEventSource = new EventSource('/api/scan-stream');
@@ -758,9 +793,10 @@ function finishProgress(d) {
         await loadScanHistory();
         await checkBusy();
         await refreshSessions();
+        shownScan = null;
+        await mountAndRender();
         if (d && d.error) toast(d.status || 'El escaneo terminó con error.', 'err');
-        else toast('Escaneo terminado. Resultados actualizados.', 'ok');
-        goTo('dashboard');
+        else toast('Escaneo terminado. El resultado queda en «Nuevo escaneo» y el Panel ya lo suma.', 'ok');
     }, 1000);
 }
 
@@ -818,16 +854,16 @@ function updateProgressUI(d) {
 async function fetchResults(force) {
     try {
         const { json } = await api('/api/results');
-        if (json.lastScan) {
-            latestScan = json.lastScan;
-            if (force || !shownScan) renderScan(latestScan, false);
-        }
+        latestScan = json.lastScan || null;
+        if (json.currentScan) currentScan = json.currentScan;
+        else if (force) currentScan = null;
+        if (currentView() === 'scan') mountAndRender();
     } catch (e) {
         toast('No se pudieron cargar los resultados.', 'err');
     }
 }
 
-function renderScan(scan, fromHistory) {
+function renderScan(scan, mode) {
     shownScan = scan;
     view.limit = PAGE_SIZE;
     const b = breakdown(scan.assets);
@@ -837,16 +873,26 @@ function renderScan(scan, fromHistory) {
 $('metric-sinfecha').textContent = b.sinFecha;
     $('metric-total').textContent = b.total;
 
-    $('results-subtitle').textContent = `${scan.targetUrl} · ${new Date(scan.date).toLocaleString()}${scan.sections && scan.sections.length ? ` · Áreas: ${scan.sections.join(', ')}` : ''}`;
-    $('last-scan-meta').textContent = `${fromHistory ? 'Escaneo del historial' : 'Último escaneo'}: ${new Date(scan.date).toLocaleString()}`;
+    if (mode === 'overview') {
+        $('results-subtitle').textContent = scan.scansCount
+            ? `Resumen de todo lo consultado: ${scan.scansCount} escaneo(s) guardado(s). Cada Approval ID cuenta una vez, con su resultado más reciente.`
+            : 'Aún no hay escaneos guardados. Lanza uno en «Nuevo escaneo».';
+        $('last-scan-meta').textContent = scan.scansCount ? `Acumulado de ${scan.scansCount} escaneo(s)` : 'Aún no hay escaneos en este equipo';
+    } else {
+        $('results-subtitle').textContent = `${scan.targetUrl} · ${new Date(scan.date).toLocaleString()}${scan.sections && scan.sections.length ? ` · Áreas: ${scan.sections.join(', ')}` : ''}`;
+        $('last-scan-meta').textContent = `${mode === 'history' ? 'Escaneo del historial' : 'Escaneo actual'}: ${new Date(scan.date).toLocaleString()}`;
+    }
     $('results-badge').innerHTML = scan.outcome
         ? `<span class="badge ${scan.outcome === 'COMPLETO' ? 'badge-success' : 'badge-warning'}">${esc(scan.outcome)}</span>` : '';
 
     const banner = $('history-banner');
-    if (fromHistory) {
+    if (mode === 'history') {
         banner.hidden = false;
-        banner.innerHTML = `<span>Estás viendo un escaneo del historial.</span>
-            <button class="btn btn-ghost btn-sm" onclick="backToLatest()">${scanRunning ? 'Volver al escaneo en curso' : 'Volver al último escaneo'}</button>`;
+        banner.innerHTML = `<span>Detalle del escaneo del historial.</span>
+            <button class="btn btn-ghost btn-sm" onclick="closeHistoryDetail()">Cerrar detalle</button>`;
+    } else if (mode === 'overview' && scan.scansCount) {
+        banner.hidden = false;
+        banner.innerHTML = '<span>Resumen acumulado de todos los escaneos guardados. El resultado de cada escaneo está en «Nuevo escaneo» y en el Historial.</span>';
     } else { banner.hidden = true; banner.innerHTML = ''; }
 
     const types = [...new Set((scan.assets || []).map(a => a.type).filter(Boolean))].sort();
@@ -856,14 +902,11 @@ $('metric-sinfecha').textContent = b.sinFecha;
     view.type = sel.value;
 
     renderInsights(b, scan.assets);
-    renderCoverage(scan);
+    if (mode === 'overview') $('coverage-box').innerHTML = ''; else renderCoverage(scan);   // la cobertura es de cada escaneo
     renderAssetsTable();
 }
 
-function backToLatest() {
-    if (scanRunning) renderLiveEmpty();             // con un escaneo en curso, "volver" es volver a ese escaneo
-    else if (latestScan) renderScan(latestScan, false);
-}
+function closeHistoryDetail() { historyScan = null; mountAndRender(); }
 
 // Indicadores del panel: índice de cumplimiento, distribución por estado y calendario de vencimientos
 function renderInsights(b, assets) {
@@ -1117,10 +1160,11 @@ async function viewAnalysis(index, opener) {
     modal.querySelector('button').focus();
 
     try {
-        const { json } = await api(`/api/reviews/${encodeURIComponent(scan.scanId)}`);
+        const sid = a.fromScanId || scan.scanId;
+        const { json } = await api(`/api/reviews/${encodeURIComponent(sid)}`);
         const prev = json.reviews && json.reviews[`${a.veevaApprovalId}|${a.location}`];
         if (prev) $('rev-msg').textContent = `Revisión previa: ${prev.verdict}`;
-        loadPrecision(scan.scanId);
+        loadPrecision(sid);
     } catch (e) { /* sin revisiones */ }
 }
 
@@ -1147,14 +1191,15 @@ async function submitReview(verdict) {
     const a = scan && scan.assets[currentIndex];
     if (!a) return;
     try {
-        const { json } = await post(`/api/reviews/${encodeURIComponent(scan.scanId)}`, {
+        const sid = a.fromScanId || scan.scanId;
+        const { json } = await post(`/api/reviews/${encodeURIComponent(sid)}`, {
             assetKey: `${a.veevaApprovalId}|${a.location}`, verdict,
             correctedId: $('rev-corrected-id').value.trim(),
             correctedDate: $('rev-corrected-date').value,
             notes: $('rev-notes').value.trim()
         });
         $('rev-msg').textContent = json.success ? `Marcada como ${verdict}.` : 'No se pudo guardar.';
-        loadPrecision(scan.scanId);
+        loadPrecision(sid);
     } catch (e) { $('rev-msg').textContent = 'No se pudo contactar con el servidor.'; }
 }
 
@@ -1162,6 +1207,7 @@ async function registerMissed() {
     const scan = shownScan;
     const id = $('missed-id').value.trim();
     if (!scan || !id) { toast('Escribe el Approval ID que no se detectó.', 'err'); return; }
+    if (scan.aggregate) { toast('Abre el escaneo desde el Historial para registrar un ID no detectado.', 'err'); return; }
     try {
         await post(`/api/reviews/${encodeURIComponent(scan.scanId)}/missed`, { id, pageUrl: $('missed-url').value.trim() });
         $('missed-id').value = ''; $('missed-url').value = '';
@@ -1184,6 +1230,10 @@ async function loadScanHistory() {
     try {
         const { json } = await api('/api/history');
         const history = json.history || [];
+        $('history-meta').textContent = history.length
+            ? `${history.length} escaneo(s) guardado(s) en este equipo · ${fmtBytes(json.storageBytes || 0)} de almacenamiento.`
+            : 'Escaneos guardados en este equipo.';
+        $('btn-clear-history').disabled = !history.length;
         if (!history.length) {
             tbody.innerHTML = `<tr><td colspan="9" class="empty-row">No hay registros en el historial todavía.</td></tr>`;
             return;
@@ -1198,7 +1248,8 @@ async function loadScanHistory() {
                 <td data-label="Por vencer" class="mono center" style="color:var(--graphite);font-weight:700">${esc(s.proximosAVencer)}</td>
                 <td data-label="Vigentes" class="mono center" style="color:var(--navy);font-weight:700">${esc(s.vigentes)}</td>
                 <td data-label="Por revisar" class="mono center">${esc(s.sinFechaFiable)}</td>
-                <td class="right"><button class="btn btn-ghost btn-sm" data-scan="${esc(s.scanId)}" onclick="openHistoryScan(this.dataset.scan)">Abrir (${esc(s.totalAnalyzed)})</button></td>
+                <td class="right row-actions"><button class="btn btn-ghost btn-sm" data-scan="${esc(s.scanId)}" onclick="openHistoryScan(this.dataset.scan)">Abrir (${esc(s.totalAnalyzed)})</button>
+                    <button class="btn btn-danger-ghost btn-sm" data-scan="${esc(s.scanId)}" onclick="deleteHistoryScan(this.dataset.scan)" aria-label="Borrar este escaneo">Borrar</button></td>
             </tr>`).join('');
     } catch (e) {
         tbody.innerHTML = `<tr><td colspan="9" class="empty-row">No se pudo cargar el historial. <button class="btn btn-ghost btn-sm" onclick="loadScanHistory()">Reintentar</button></td></tr>`;
@@ -1209,9 +1260,44 @@ async function openHistoryScan(scanId) {
     try {
         const { res, json } = await api(`/api/history/${encodeURIComponent(scanId)}`);
         if (!res.ok || !json.scan) throw new Error('not found');
-        renderScan(json.scan, scanRunning || !latestScan || latestScan.scanId !== json.scan.scanId);
-        goTo('dashboard');
+        historyScan = json.scan;
+        await mountAndRender();
+        $('results-block').scrollIntoView({ behavior: 'smooth', block: 'start' });
     } catch (e) { toast('No se pudo abrir el escaneo.', 'err'); }
+}
+
+function fmtBytes(n) {
+    if (n < 1024) return `${n} B`;
+    if (n < 1048576) return `${(n / 1024).toFixed(1)} KB`;
+    return `${(n / 1048576).toFixed(1)} MB`;
+}
+
+async function afterHistoryDelete(removedId) {
+    if (!removedId || (historyScan && historyScan.scanId === removedId)) historyScan = null;
+    await loadScanHistory();
+    await fetchResults();
+    await mountAndRender();
+}
+
+async function deleteHistoryScan(scanId) {
+    if (!confirm('¿Borrar este escaneo del historial? También se borran sus capturas de evidencia. No se puede deshacer.')) return;
+    try {
+        const { res, json } = await post(`/api/history/${encodeURIComponent(scanId)}/delete`, {});
+        if (!res.ok || !json.success) { toast(json.error || 'No se pudo borrar el escaneo.', 'err'); return; }
+        toast('Escaneo borrado.', 'ok');
+        await afterHistoryDelete(scanId);
+    } catch (e) { toast('No se pudo contactar con el servidor.', 'err'); }
+}
+
+async function clearHistory() {
+    const meta = $('history-meta').textContent;
+    if (!confirm(`¿Borrar TODO el historial?\n\n${meta}\n\nSe eliminan los escaneos guardados y sus capturas de evidencia; el Panel quedará en ceros. Las sesiones de AzMed y PromoMats no se tocan. No se puede deshacer.`)) return;
+    try {
+        const { res, json } = await post('/api/history/clear', {});
+        if (!res.ok || !json.success) { toast(json.error || 'No se pudo borrar el historial.', 'err'); return; }
+        toast(`Historial borrado (${json.removed} escaneo(s), ${fmtBytes(json.freedBytes || 0)} liberados).`, 'ok');
+        await afterHistoryDelete(null);
+    } catch (e) { toast('No se pudo contactar con el servidor.', 'err'); }
 }
 
 // ---------- Exportación ----------

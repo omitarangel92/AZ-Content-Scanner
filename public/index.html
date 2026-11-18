@@ -49,7 +49,7 @@
         </nav>
 
         <div class="sb-foot">
-            <div class="sb-label">Conexiones</div>
+            <div class="sb-label">Estado de las cuentas</div>
             <div class="session-dots" id="session-dots" aria-label="Estado de las cuentas"></div>
             <div class="sb-version">v3.1 · Uso interno AstraZeneca LATAM</div>
         </div>
@@ -97,6 +97,8 @@
 
             <!-- ============ Vista: Panel ============ -->
             <div class="view" id="view-dashboard" data-view="dashboard">
+              <div class="results-host" data-host="dashboard">
+               <div id="results-block" class="results-block">
                 <div id="history-banner" class="banner" hidden></div>
 
                 <div class="kpis">
@@ -184,6 +186,8 @@
                     </div>
                     <div class="more-row"><button id="btn-more" class="btn btn-ghost btn-sm" hidden onclick="showMore()">Mostrar más</button></div>
                 </section>
+               </div>
+              </div>
             </div>
 
             <!-- ============ Vista: Nuevo escaneo ============ -->
@@ -273,6 +277,10 @@
                         </section>
                     </div>
                 </div>
+                <!-- Resultado del escaneo actual (se muestra hasta que se cierre la app o se lance otro) -->
+                <div class="results-host" data-host="scan">
+                    <section id="scan-empty" class="card empty-card"><h2>Resultado de este escaneo</h2><p class="hint">Aquí verás el resultado del escaneo que lances, de forma independiente al resumen del Panel.</p></section>
+                </div>
             </div>
 
             <!-- ============ Vista: Historial ============ -->
@@ -281,9 +289,12 @@
                     <div class="card-head">
                         <div>
                             <h2>Escaneos guardados</h2>
-                            <p class="hint">Últimos 10 escaneos guardados en este equipo.</p>
+                            <p class="hint" id="history-meta">Escaneos guardados en este equipo.</p>
                         </div>
-                        <button class="btn btn-ghost btn-sm" onclick="loadScanHistory()">↻ Actualizar</button>
+                        <div class="head-actions">
+                            <button class="btn btn-ghost btn-sm" onclick="loadScanHistory()">↻ Actualizar</button>
+                            <button class="btn btn-danger-ghost btn-sm" id="btn-clear-history" onclick="clearHistory()" disabled>Borrar historial</button>
+                        </div>
                     </div>
                     <div class="table-wrap">
                         <table class="table">
@@ -295,6 +306,7 @@
                         </table>
                     </div>
                 </section>
+                <div class="results-host" data-host="history"></div>
             </div>
 
             <!-- ============ Vista: Cuentas ============ -->
@@ -304,7 +316,7 @@
                         <span class="step-num" aria-hidden="true"><svg class="ico"><use href="#i-shield"/></svg></span>
                         <div>
                             <h2>Conecta tus cuentas</h2>
-                            <p class="hint">Se abre una ventana del navegador: inicia sesión (incluido MFA) y pulsa "Terminé". Las sesiones se guardan solo en este equipo.</p>
+                            <p class="hint">Aquí inicias, renuevas o borras las sesiones (se abre una ventana del navegador: inicia sesión, incluido MFA, y pulsa "Terminé"). El estado de cada cuenta también se resume en la barra lateral. Las sesiones se guardan solo en este equipo.</p>
                         </div>
                     </div>
                     <div id="sessions-list" class="sessions-list"></div>

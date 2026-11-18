@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { mergeSummaries } = require('../server/mergeScans');
+const { mergeSummaries, aggregateHistory } = require('../server/mergeScans');
 
 const cov = (o = {}) => ({ pagesRead: 10, imagesOcr: 2, imagesByNameOnly: 1, wafBlocked: 0, partial: false, partialReasons: [], ocrAvailable: true, ocrNote: '', acceptedOverlays: [], failures: [], ...o });
 const asset = (id, status, pages, extra = {}) => ({ veevaApprovalId: id, type: 'texto', status, approvedDate: null, expirationDate: null, daysRemaining: null, note: '', assetUrl: '', pages, pagesCount: pages.length, ...extra });
@@ -62,4 +62,27 @@ test('mergeSummaries: los videos «NO VERIFICADO» se deduplican y cuentan como 
     assert.equal(m.sinFechaFiable, 2);
     assert.equal(m.coverage.videosUnverified, 3);
     assert.equal(m.coverage.kalturaFailures, 3);
+});
+
+test('aggregateHistory: acumulado de todos los escaneos, cada ID una vez y gana el más reciente', () => {
+    const newer = { scanId: 'b2', ...summary([asset('CC-10001', 'VENCIDO', ['http://n/1'], { expirationDate: '2025-01-01' }), asset('CC-10003', 'VIGENTE', ['http://n/3'])]) };
+    const older = { scanId: 'a1', ...summary([asset('CC-10001', 'VIGENTE', ['http://o/1']), asset('CC-10002', 'PROXIMO A VENCER', ['http://o/2'])]) };
+    const m = aggregateHistory([newer, older]);   // del más reciente al más antiguo, como el historial
+    assert.equal(m.aggregate, true);
+    assert.equal(m.scansCount, 2);
+    assert.equal(m.totalAnalyzed, 3);
+    const by = Object.fromEntries(m.assets.map(a => [a.veevaApprovalId, a]));
+    assert.equal(by['CC-10001'].status, 'VENCIDO');        // el escaneo reciente manda
+    assert.equal(by['CC-10001'].fromScanId, 'b2');
+    assert.equal(by['CC-10002'].fromScanId, 'a1');
+    assert.equal(m.vencidos, 1);
+    assert.equal(m.proximosAVencer, 1);
+    assert.equal(m.vigentes, 1);
+});
+
+test('aggregateHistory: historial vacío → ceros', () => {
+    const m = aggregateHistory([]);
+    assert.equal(m.scansCount, 0);
+    assert.equal(m.totalAnalyzed, 0);
+    assert.deepEqual(m.assets, []);
 });

@@ -65,7 +65,29 @@ function loadHistory() {
     return h;
 }
 
+// Espacio que ocupa el historial (history.json + capturas) y borrado total de capturas
+function dirSize(dir) {
+    let n = 0;
+    try {
+        for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+            const p = path.join(dir, e.name);
+            n += e.isDirectory() ? dirSize(p) : fs.statSync(p).size;
+        }
+    } catch (e) { /* carpeta inexistente */ }
+    return n;
+}
+function usageBytes() {
+    let n = dirSize(shotsDir);
+    try { n += fs.statSync(path.join(dataDir, 'history.json')).size; } catch (e) { /* sin historial */ }
+    return n;
+}
+function deleteAllShots() {
+    try { fs.rmSync(shotsDir, { recursive: true, force: true }); } catch (e) { /* ya no existe */ }
+}
+
 module.exports = {
+    usageBytes,
+    deleteAllShots,
     loadHistory,
     saveHistory: (h) => writeJson('history.json', h),
     loadReviews: () => readJson('reviews.json', {}),

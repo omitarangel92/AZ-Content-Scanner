@@ -22,7 +22,7 @@ const scannerEngine = require('./scannerEngine');
 const authManager = require('./authManager');
 const storage = require('./storage');
 const security = require('./security');
-const { mergeSummaries } = require('./mergeScans');
+const { mergeSummaries, aggregateHistory } = require('./mergeScans');
 
 const app = express();
 app.disable('x-powered-by');
@@ -57,6 +57,7 @@ app.get('/api/token', (req, res) => res.json({ token: security.TOKEN }));
 
 let sseClients = [];
 let lastScanResult = null;
+let currentScan = null;   // escaneo hecho desde que se abrió la app: «Nuevo escaneo» lo muestra hasta que se cierre o se lance otro
 let lastTargetUrl = null;   // última URL escaneada/validada: la usa el mantenimiento de sesiones
 let busy = null; // null | 'validating' | 'scanning'
 let busySince = 0;
@@ -508,16 +509,9 @@ function saveScan(scanId, targetUrl, region, country, summary) {
         ...summary,
         scanId
     };
-    scanHistory.unshift(lastScanResult);
-    let prunedReviews = false;
-    while (scanHistory.length > 10) {
-        const old = scanHistory.pop();
-        storage.deleteShots(old.scanId);
-        // Las revisiones de un escaneo ya eliminado no sirven y reviews.json crecía sin límite
-        if (hasOwn(reviews, old.scanId)) { delete reviews[old.scanId]; prunedReviews = true; }
-    }
+    currentScan = lastScanResult;
+    scanHistory.unshift(lastScanResult);   // el historial no tiene límite: se vacía con «Borrar historial»
     try { storage.saveHistory(scanHistory); } catch (e) { console.error('No se pudo guardar el historial:', e.message); }
-    if (prunedReviews) { try { storage.saveReviews(reviews); } catch (e) { console.error('No se pudo guardar las revisiones:', e.message); } }
 }
 
 app.post('/api/cancel-scan', (req, res) => {
@@ -527,7 +521,10 @@ app.post('/api/cancel-scan', (req, res) => {
 });
 
 // ---------- Resultados e historial ----------
-app.get('/api/results', (req, res) => res.json({ lastScan: lastScanResult }));
+app.get('/api/results', (req, res) => res.json({ lastScan: lastScanResult, currentScan }));
+
+// Panel: resumen acumulado de todos los escaneos guardados
+app.get('/api/overview', (req, res) => res.json({ overview: aggregateHistory(scanHistory), scans: scanHistory.length }));
 
 app.get('/api/history', (req, res) => {
     const light = scanHistory.map(s => ({
@@ -537,7 +534,38 @@ app.get('/api/history', (req, res) => {
         vigentes: s.vigentes, retirados: s.retirados || 0, sinFechaFiable: s.sinFechaFiable,
         sections: s.sections || null
     }));
-    res.json({ history: light });
+    res.json({ history: light, storageBytes: storage.usageBytes() });
+});
+
+// Borrado del historial (libera también las capturas y las revisiones). No se permite con un escaneo en curso.
+function removeScans(ids) {
+    for (const id of ids) {
+        storage.deleteShots(id);
+        if (hasOwn(reviews, id)) delete reviews[id];
+    }
+    try { storage.saveHistory(scanHistory); } catch (e) { console.error('No se pudo guardar el historial:', e.message); }
+    try { storage.saveReviews(reviews); } catch (e) { console.error('No se pudo guardar las revisiones:', e.message); }
+    lastScanResult = scanHistory[0] || null;
+}
+const scanActive = () => busy === 'scanning' || !!runningScan || scannerEngine.isRunning();
+
+app.post('/api/history/clear', (req, res) => {
+    if (scanActive()) return res.status(409).json({ success: false, error: 'Hay un escaneo en curso. Espera a que termine para borrar el historial.' });
+    const freed = storage.usageBytes();
+    const ids = scanHistory.map(s => s.scanId);
+    scanHistory.length = 0;
+    removeScans(ids);
+    storage.deleteAllShots();
+    res.json({ success: true, removed: ids.length, freedBytes: freed });
+});
+
+app.post('/api/history/:scanId/delete', (req, res) => {
+    if (scanActive()) return res.status(409).json({ success: false, error: 'Hay un escaneo en curso. Espera a que termine para borrar.' });
+    const i = scanHistory.findIndex(s => s.scanId === req.params.scanId);
+    if (i < 0) return res.status(404).json({ success: false, error: 'No encontrado' });
+    scanHistory.splice(i, 1);
+    removeScans([req.params.scanId]);
+    res.json({ success: true, removed: 1 });
 });
 
 app.get('/api/history/:scanId', (req, res) => {

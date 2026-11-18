@@ -169,12 +169,24 @@ async function audit(page, touch) {
             }
             if (SHOT.has(name) && (v === 'dashboard' || (v === 'history' && w < 700))) await page.screenshot({ path: path.join(out, `${name.replace(/[^a-z0-9]+/gi, '_')}_${v}.png`), fullPage: v === 'dashboard' && w < 1000 });
         }
-        // Panel con TODOS los desplegables de cobertura abiertos (listas largas de URLs, motivos, áreas)
-        await page.goto(base + '#/dashboard'); await page.waitForTimeout(800);
-        await page.evaluate(() => document.querySelectorAll('#coverage-box details').forEach(d => { d.open = true; }));
-        await page.waitForTimeout(200);
-        report.push({ name, view: 'cobertura abierta', layout: null, ...(await audit(page, touch)) });
-        if (SHOT.has(name) && w < 900) await page.screenshot({ path: path.join(out, `${name.replace(/[^a-z0-9]+/gi, '_')}_cobertura.png`), fullPage: true });
+        // «Nuevo escaneo» con el resultado del escaneo actual (simulado) y TODOS los desplegables de cobertura abiertos
+        const cur = await ctx.newPage();
+        cur.on('pageerror', e => jsErrors.push(`${name} (resultado actual): ${e.message}`));
+        await cur.route('**/api/results', r => r.fulfill({ json: { lastScan: scan, currentScan: scan } }));
+        await cur.goto(base + '#/scan'); await cur.waitForTimeout(1000);
+        report.push({ name, view: 'nuevo escaneo con resultado', layout: null, ...(await audit(cur, touch)) });
+        await cur.evaluate(() => document.querySelectorAll('#coverage-box details').forEach(d => { d.open = true; }));
+        await cur.waitForTimeout(200);
+        report.push({ name, view: 'cobertura abierta', layout: null, ...(await audit(cur, touch)) });
+        if (SHOT.has(name) && w < 900) await cur.screenshot({ path: path.join(out, `${name.replace(/[^a-z0-9]+/gi, '_')}_cobertura.png`), fullPage: true });
+        await cur.close();
+
+        // Historial: detalle de un escaneo abierto bajo la tabla
+        await page.goto(base + '#/history'); await page.waitForTimeout(600);
+        await page.click('#history-table-body tr:first-child button'); await page.waitForTimeout(800);
+        await page.evaluate(() => document.querySelectorAll('.table-wrap').forEach(w => { w.scrollLeft = 0; }));
+        report.push({ name, view: 'historial con detalle', layout: null, ...(await audit(page, touch)) });
+        if (SHOT.has(name) && w < 900) await page.screenshot({ path: path.join(out, `${name.replace(/[^a-z0-9]+/gi, '_')}_historial_detalle.png`), fullPage: true });
 
         // Ventana de conexión de cuentas
         await page.goto(base + '#/scan'); await page.waitForTimeout(500);
@@ -192,7 +204,7 @@ async function audit(page, touch) {
         await live.route('**/api/scan-stream', r => r.fulfill({ status: 200, headers: { 'content-type': 'text/event-stream' },
             body: 'data: ' + JSON.stringify({ status: '[2/3 · ' + 'ONCOLOGÍA '.repeat(6) + '] Analizando (120/800): ' + LONG, progress: 41, step: 3, pagesRead: 1234, idsFound: 4321, elapsed: 3725,
                 live: { vencidos: 123, proximos: 45, vigentes: 678, retirados: 9, sinFecha: 210, total: 1065 } }) + '\n\n' }));
-        await live.goto(base + '#/dashboard'); await live.waitForTimeout(1500);
+        await live.goto(base + '#/scan'); await live.waitForTimeout(1500);
         report.push({ name, view: 'escaneo en curso', layout: null, ...(await audit(live, touch)) });
         if (SHOT.has(name) && w < 900) await live.screenshot({ path: path.join(out, `${name.replace(/[^a-z0-9]+/gi, '_')}_encurso.png`), fullPage: true });
         await live.close();

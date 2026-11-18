@@ -1,6 +1,6 @@
 # AstraZeneca | AZ Content Scanner (LATAM)
 
-**AZ Content Scanner** audita los sitios AZMED de AstraZeneca LATAM (`azmed.cr`, `.com.mx`, `.com.br`, `.com.ar`, `.cl`, `.uy`): detecta los **Veeva Approval IDs** en texto, imágenes (OCR), PDF y videos Kaltura, consulta cada ID en **PromoMats** y clasifica el material como *vigente*, *por vencer*, *vencido* o *retirado*. Guarda capturas de evidencia y un historial de los últimos 10 escaneos.
+**AZ Content Scanner** audita los sitios AZMED de AstraZeneca LATAM (`azmed.cr`, `.com.mx`, `.com.br`, `.com.ar`, `.cl`, `.uy`): detecta los **Veeva Approval IDs** en texto, imágenes (OCR), PDF y videos Kaltura, consulta cada ID en **PromoMats** y clasifica el material como *vigente*, *por vencer*, *vencido* o *retirado*. Guarda capturas de evidencia y un historial sin límite que puedes borrar (todo o por escaneo).
 
 Es una herramienta **local**: un servidor Node/Express en tu equipo, una interfaz web en `http://localhost:3000` y Chromium (Playwright) para rastrear.
 
@@ -31,14 +31,14 @@ La aplicación tiene cuatro vistas (barra lateral):
 
 | Vista | Para qué sirve |
 | :--- | :--- |
-| **Panel** | KPIs (vencidos, por vencer, vigentes, retirados, por revisar), índice de cumplimiento, distribución, calendario de vencimientos y tabla de materiales con filtros, orden, detalle y revisión manual. Exporta CSV o imprime un informe. |
+| **Panel** | Resumen **acumulado de todos los escaneos guardados** (cada Approval ID cuenta una vez, con su resultado más reciente): KPIs (vencidos, por vencer —30 días—, vigentes, por revisar), índice de cumplimiento, distribución, calendario de vencimientos y tabla de materiales con filtros, orden, detalle y revisión manual. Exporta CSV o imprime un informe. |
 | **Nuevo escaneo** | Elegir el sitio, **detectar las áreas del menú** (HOME, ONCOLOGÍA, CVRM…) y marcar cuáles analizar, o elegir el sitio completo. El progreso se ve en cualquier vista. |
-| **Historial** | Los últimos 10 escaneos; al abrir uno se muestra en el Panel. |
+| **Historial** | Todos los escaneos guardados, con el espacio que ocupan. «Abrir» muestra su detalle debajo de la tabla; «Borrar» elimina un escaneo y «Borrar historial» los elimina todos (con sus capturas; no toca las sesiones). |
 | **Cuentas** | Conectar y comprobar las sesiones de AzMed y PromoMats. |
 
 1. En **Cuentas**, pulsa *Iniciar sesión* en cada servicio: se abre una ventana de Chromium, inicia sesión (incluido MFA) y pulsa *Terminé*.
 2. En **Nuevo escaneo**, elige el sitio y pulsa *Iniciar escaneo* (un sitio completo tarda 20–40 min).
-3. Revisa los resultados en el **Panel**. En *Detalle* puedes marcar si la detección es correcta (alimenta la precisión/recall) o reportar un ID no detectado.
+3. El resultado del escaneo que lanzaste aparece en **Nuevo escaneo**, debajo del paso 3, y se conserva hasta que lances otro o cierres la app; el **Panel** suma todo lo escaneado. En *Detalle* puedes marcar si la detección es correcta (alimenta la precisión/recall) o reportar un ID no detectado.
 
 **Las 2 sesiones (AzMed y PromoMats) son obligatorias**: el servidor no inicia el escaneo si falta alguna o está expirada. Kaltura no necesita sesión (sus metadatos se leen de forma anónima). Sin PromoMats no hay fechas con las que comparar los Approval IDs (antes se escaneaba igual y todo salía «Sin fecha»). Si PromoMats no responde al empezar, el escaneo se detiene en el acto.
 

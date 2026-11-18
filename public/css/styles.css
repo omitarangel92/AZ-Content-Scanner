@@ -511,3 +511,12 @@ details > summary { margin-bottom: var(--sp-2); }
 .check input[type="checkbox"] { width: 1.1rem; height: 1.1rem; min-width: 0; padding: 0; margin: .15em 0 0; }
 .check span { white-space: normal; flex: 1 1 0; }
 @media (pointer: coarse) { .check { min-height: 2.75rem; align-items: center; } .check input[type="checkbox"] { width: 1.5rem; height: 1.5rem; margin: 0; } }
+
+/* Resultados reubicados por vista (Panel / Nuevo escaneo / Historial) */
+.results-host, .results-block { display: grid; gap: var(--sp-6); min-width: 0; }
+.results-block[hidden], .results-host:empty { display: none; }
+.empty-card .hint { margin-top: var(--sp-2); }
+.head-actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); justify-content: flex-end; }
+.row-actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); justify-content: flex-end; }
+@media (max-width: 640px) { .results-host, .results-block { gap: var(--sp-5); } .head-actions { justify-content: flex-start; } }
+@media (min-width: 641px) { .row-actions { flex-direction: column; align-items: flex-end; flex-wrap: nowrap; } }
