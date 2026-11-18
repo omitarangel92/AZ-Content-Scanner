@@ -892,7 +892,8 @@ class ScannerEngine {
                 if (authManager.isAccountUrl(c)) authManager.rememberProtectedUrl(baseDomain, c);
                 let nextHop = 0;
                 if (sectionMode && !explicit && !inSections(c, sections) && !inSections(c, alias.prefixes)) {
-                    if (!viaContent || fromSitemap || hop >= MAX_HOPS || BOILERPLATE.test(new URL(c).pathname)) { noteOutOfScope(c); return; }
+                    // Lo que solo aparece en el sitemap (rutas viejas /content/…, /en/…) no se lista: son páginas obsoletas, no enlaces reales
+                    if (!viaContent || fromSitemap || hop >= MAX_HOPS || BOILERPLATE.test(new URL(c).pathname)) { if (!fromSitemap) noteOutOfScope(c); return; }
                     nextHop = hop + 1;
                 }
                 const path = new URL(c).pathname;
