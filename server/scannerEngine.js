@@ -669,10 +669,38 @@ class ScannerEngine {
             if (!f.screenshotRef && screenshotRef) f.screenshotRef = screenshotRef;
         };
 
+        // Sumatoria en vivo para el panel: estado de cada ID con lo que PromoMats ya respondió (el resto cuenta como
+        // "por revisar" hasta que llegue su fecha). Se recalcula como máximo una vez por segundo.
+        const liveIds = !!params.liveIds;
+        let liveCache = null, liveAt = 0;
+        const liveSnapshot = () => {
+            if (liveCache && Date.now() - liveAt < 1000) return liveCache;
+            const res = vaultStream ? vaultStream.peek() : new Map();
+            const c = { vencidos: 0, proximos: 0, vigentes: 0, retirados: 0, sinFecha: 0, total: 0 };
+            const ids = {};
+            for (const id of findings.keys()) {
+                const r = res.get(id);
+                let code = 'S';
+                if (r && r.status === 'VENCIDO') { c.vencidos++; code = 'V'; }
+                else if (r && r.status === 'PROXIMO A VENCER') { c.proximos++; code = 'P'; }
+                else if (r && r.status === 'VIGENTE') { c.vigentes++; code = 'G'; }
+                else if (r && r.status === 'RETIRADO') { c.retirados++; code = 'R'; }
+                else c.sinFecha++;
+                if (liveIds) ids[id] = code;
+            }
+            const extra = new Set([...noIdFindings.map(n => n.assetUrl), ...unverifiedVideos.map(u => u.assetUrl)]).size;
+            c.sinFecha += extra;
+            c.total = findings.size + extra;
+            c.extra = extra;
+            if (liveIds) c.ids = ids;
+            liveCache = c; liveAt = Date.now();
+            return c;
+        };
+
         const emit = (step, status, progress, extra = {}) => sendSSE({
             scanId, step, status, progress,
             elapsed: Math.floor((Date.now() - startedAt) / 1000),
-            pagesRead: coverage.pagesRead, idsFound: findings.size, ...extra
+            pagesRead: coverage.pagesRead, idsFound: findings.size, live: liveSnapshot(), ...extra
         });
 
         const fail = (url, reason) => {

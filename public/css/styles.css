@@ -480,3 +480,25 @@ details > summary { margin-bottom: var(--sp-2); }
     .loader-bar > span { width: 100%; animation: none; opacity: .55; }
     .btn.is-loading .ico { animation: none; }
 }
+
+/* Barra superior en móvil: los 4 iconos de navegación no deben montarse sobre el logo. Si no caben a su lado, pasan a una
+   segunda fila (antes desbordaban hacia la izquierda y quedaban tapados por el logo en 320–390 px). */
+@media (max-width: 640px) {
+    .sb-nav { min-width: max-content; }
+}
+@media (max-width: 400px) {
+    .sb-nav { flex: 1 1 100%; justify-content: space-around; }
+}
+
+/* Textos largos sin espacios (URLs, motivos, notas): se parten en vez de desbordar o forzar scroll horizontal */
+.coverage ul { overflow-x: hidden; overflow-y: auto; }
+.coverage li, .coverage code, .coverage p, .coverage summary,
+.url-list li, .url-list a, .callout, .notice, .detail-block, .gate-status, .hint { overflow-wrap: anywhere; }
+@media (max-width: 640px) {
+    .table td { overflow-wrap: anywhere; }
+    .table td.nowrap { white-space: normal; }
+}
+@media (max-width: 640px) {
+    /* Etiquetas de estado largas («No verificado») en la columna estrecha de las tarjetas: se ajustan en vez de salirse */
+    .table td .badge { white-space: normal; max-width: 100%; line-height: 1.2; }
+}

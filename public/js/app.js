@@ -673,6 +673,19 @@ function renderLiveEmpty() {
     $('coverage-box').innerHTML = '';
 }
 
+// Sumatoria en vivo: los indicadores del panel suben a medida que se escanea (solo si se está viendo el escaneo en curso)
+function applyLive(l) {
+    if (!shownScan || !shownScan.live) return;
+    const b = { vencidos: l.vencidos || 0, proximos: l.proximos || 0, vigentes: l.vigentes || 0, retirados: l.retirados || 0, sinFecha: l.sinFecha || 0, total: l.total || 0 };
+    $('metric-vencido').textContent = b.vencidos;
+    $('metric-prox').textContent = b.proximos;
+    $('metric-vigente').textContent = b.vigentes;
+    $('metric-retirado').textContent = b.retirados;
+    $('metric-sinfecha').textContent = b.sinFecha;
+    $('metric-total').textContent = b.total;
+    renderInsights(b, []);
+}
+
 let finishedAt = 0;   // cuándo terminó el último escaneo (evita re-enganchar el progreso mientras el servidor guarda)
 
 function attachProgress() {
@@ -761,6 +774,7 @@ function updateProgressUI(d) {
     if (d.elapsed !== undefined) $('prog-elapsed').textContent = fmtElapsed(d.elapsed);
     if (d.pagesRead !== undefined) $('prog-pages').textContent = d.pagesRead;
     if (d.idsFound !== undefined) $('prog-ids').textContent = d.idsFound;
+    if (d.live) applyLive(d.live);
 
     if (d.step) {
         document.querySelectorAll('#stepper li').forEach(li => {

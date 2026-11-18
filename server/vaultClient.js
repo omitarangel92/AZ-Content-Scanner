@@ -594,6 +594,8 @@ class VaultClient {
         const workers = self.available ? self.pages.map(p => worker(p)) : [];
 
         return {
+            // Resultados obtenidos hasta ahora (para el panel en vivo)
+            peek() { return results; },
             push(id) {
                 if (seen.has(id)) return;
                 seen.add(id);

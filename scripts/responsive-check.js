@@ -28,6 +28,20 @@ const scan = { scanId: 'demo1', targetUrl: 'https://www.azmed.cr', region: 'CAMC
     totalAnalyzed: assets.length, vencidos: 3, proximosAVencer: 5, vigentes: 12, retirados: 1, sinFechaFiable: 1, pagesScanned: 214,
     imagesAnalyzed: 340, durationSeconds: 1500, outcome: 'PARCIAL', assets,
     coverage: { pagesRead: 214, pagesFailed: 3, brokenLinks: 2, pagesNeedingLogin: 0, imagesOcr: 120, imagesByNameOnly: 220, pdfsFull: 14, pdfsByNameOnly: 1, videosChecked: 6, partialReasons: ['3 páginas no se pudieron leer'] } };
+// Datos extremos: textos largos sin espacios, muchas áreas, motivos largos y listas con URLs enormes (lo que suele desbordar)
+const LONG = 'https://www.azmed.cr/es/home/' + 'segmento-muy-largo-sin-espacios-'.repeat(8) + 'fin.html';
+assets.push({ ...mk(n++, 'VIGENTE', 400, 'Imagen + Video + PDF', 40), location: LONG, assetUrl: LONG, snippet: 'x'.repeat(260), note: 'Nota larga '.repeat(40) + 'y'.repeat(120), pages: Array.from({ length: 30 }, (_, i) => LONG + i) });
+assets.push({ ...mk(n++, 'NO VERIFICADO', null, 'Video', 1), veevaApprovalId: 'SIN VERIFICAR', note: 'No se pudieron leer los metadatos del video en Kaltura (apiRequestContext.get: Timeout 25000ms exceeded.' + ' detalle'.repeat(30) + ')' });
+scan.assets = assets; scan.totalAnalyzed = assets.length;
+scan.sections = ['ONCOLOGÍA', 'CVRM', 'PSP (Programa para Pacientes) con un nombre larguísimo para probar el ajuste'];
+scan.coverage = { ...scan.coverage,
+    scope: { mode: 'areas', sections: scan.sections },
+    areas: scan.sections.map((label, i) => ({ label, status: i === 2 ? 'error' : 'completo', attempts: 2, pagesRead: 120 + i, idsFound: 30 + i, error: i === 2 ? 'Error: ' + 'timeout '.repeat(30) : null })),
+    partialReasons: ['PromoMats no devolvió fecha para 17 de 17 Approval IDs. Motivos: 15 × No se encontró el cuadro de búsqueda de PromoMats (el portal tardó en cargar o cambió su diseño); 2 × PromoMats no respondió a la búsqueda en 25 s (red lenta o portal ocupado). Pantalla: «' + 'x'.repeat(140) + '».', 'Kaltura: no se pudieron leer los metadatos de 9 video(s) (tiempo agotado o servicio no disponible); 9 quedan como «No verificado». Reintenta o sube KALTURA_TIMEOUT_SECONDS en .env.', 'Se alcanzó el límite de 800 páginas (MAX_PAGES); quedaron 120 URLs sin visitar.'],
+    outOfScope: Array.from({ length: 40 }, (_, i) => i % 3 === 0 ? LONG + i : 'https://www.azmed.cr/es/home/pagina-fuera-de-area-' + i + '.html'),
+    failures: Array.from({ length: 8 }, (_, i) => ({ url: LONG + i, reason: 'Bloqueado por el WAF del sitio (403 CloudFront) ' + 'detalle '.repeat(12) })),
+    brokenLinkList: Array.from({ length: 12 }, (_, i) => LONG + 'b' + i), loginPages: [LONG, LONG + 'l'], sitemapStaleList: [LONG],
+    videosUnverified: 3, kalturaFailures: 3, sitemapDiscarded: 120, sitemapUrls: 378, sitemapStale: 339, wafBlocked: 8, duplicatesSkipped: 4, hiddenTextIds: 9 };
 fs.writeFileSync(path.join(dataRoot, 'data', 'history.json'), JSON.stringify([scan, { ...scan, scanId: 'demo2', date: new Date(Date.now() - 864e5).toISOString() }]));
 
 const PORT = 38200 + Math.floor(Math.random() * 300);
@@ -75,6 +89,50 @@ async function audit(page, touch) {
                 if (hit.height < 43.5 || hit.width < 43.5) res.smallTargets.push(`${el.tagName.toLowerCase()}${el.id ? '#' + el.id : ''} "${(el.textContent || el.getAttribute('aria-label') || '').trim().slice(0, 20)}" ${Math.round(r.width)}x${Math.round(r.height)}`);
             }
         }
+        // Contenido que se sale de SU tarjeta (aunque siga dentro de la pantalla) y texto recortado sin puntos suspensivos
+        const CONT = '.card, .kpi, .modal-box, .sess, .gate-row, .coverage-grid > div, .detail-grid > div, .live-stats div, .sec-row, .banner, .disclaimer, .score, .insight, .full-toggle, .notice, details';
+        res.clipped = [];
+        for (const el of document.querySelectorAll('body *')) {
+            const cs = getComputedStyle(el);
+            if (cs.display === 'none' || cs.visibility === 'hidden' || el.closest('[hidden]') || el.closest('svg') || cs.position === 'fixed') continue;
+            if (cs.position === 'absolute' && el.getBoundingClientRect().width <= 1) continue;
+            const r = el.getBoundingClientRect();
+            if (r.width === 0 || r.height === 0) continue;
+            // Fuera por la izquierda de un contenedor con scroll: ni siquiera se puede llegar desplazando
+            for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+                const o = getComputedStyle(p).overflowX;
+                if (o === 'hidden' || o === 'clip') break;   // recorte intencionado (p. ej. la barra de carga animada)
+                if (o === 'auto' || o === 'scroll') {
+                    if (r.left < p.getBoundingClientRect().left - 1.5) res.clipped.push(`${el.tagName.toLowerCase()}${typeof el.className === 'string' && el.className ? '.' + el.className.split(' ')[0] : ''} queda fuera por la izquierda de ${p.className ? '.' + String(p.className).split(' ')[0] : p.tagName.toLowerCase()} (inalcanzable)`);
+                    break;
+                }
+            }
+            const holder = el.parentElement && el.parentElement.closest(CONT);
+            const name = () => `${el.tagName.toLowerCase()}${el.id ? '#' + el.id : ''}${typeof el.className === 'string' && el.className ? '.' + el.className.split(' ')[0] : ''}`;
+            if (holder && !scrollable(el)) {
+                const hr = holder.getBoundingClientRect();
+                if (r.right > hr.right + 1.5 || r.left < hr.left - 1.5) res.clipped.push(`${name()} sale de ${holder.className ? '.' + String(holder.className).split(' ')[0] : holder.tagName.toLowerCase()} (+${Math.round(Math.max(r.right - hr.right, hr.left - r.left))}px)`);
+            }
+            // Scroll horizontal interno no deseado (listas de URLs, textos): solo se admite en tablas y en la barra de iconos
+            if ((cs.overflowX === 'auto' || cs.overflowX === 'scroll') && el.scrollWidth > el.clientWidth + 2 && !el.matches('.table-wrap, .sb-nav, .stepper, .modal, .main, .view, html, body') && !el.closest('.table-wrap')) {
+                res.clipped.push(`${name()} tiene scroll horizontal interno (${el.scrollWidth}>${el.clientWidth})`);
+            }
+            // Texto que desborda su PROPIA caja (cadenas largas sin espacios, URLs): la tarjeta o la pantalla lo recorta
+            if (cs.overflowX === 'visible' && cs.display !== 'inline' && el.clientWidth > 0 && el.scrollWidth > el.clientWidth + 2 && !scrollable(el) && !el.closest('svg')) {
+                res.clipped.push(`${name()}${el.dataset && el.dataset.label ? '[' + el.dataset.label + ']' : ''} el texto desborda su caja (${el.scrollWidth}>${el.clientWidth}) «${(el.textContent || '').trim().slice(0, 40)}»`);
+            }
+            // Solo cuenta si un HIJO real (texto/elementos) queda recortado; los resplandores decorativos (::before/::after) no
+            const childOverflow = (cs.overflowX === 'hidden' || cs.overflowX === 'clip') && Array.from(el.children).some(ch => {
+                const c = getComputedStyle(ch);
+                if (c.display === 'none' || c.position === 'absolute') return false;
+                const cr = ch.getBoundingClientRect();
+                return cr.width > 0 && (cr.right > r.right + 1.5 || cr.left < r.left - 1.5);
+            });
+            if (childOverflow && cs.textOverflow !== 'ellipsis' && el.clientWidth > 0 && !/^(HTML|BODY)$/.test(el.tagName) && !el.matches('.main, .view')) {
+                res.clipped.push(`${name()} recorta contenido sin puntos suspensivos (${el.scrollWidth}>${el.clientWidth})`);
+            }
+        }
+        res.clipped = [...new Set(res.clipped)].slice(0, 8);
         res.offscreen = [...new Set(res.offscreen)].slice(0, 6);
         res.smallTargets = [...new Set(res.smallTargets)].slice(0, 6);
         return res;
@@ -111,6 +169,34 @@ async function audit(page, touch) {
             }
             if (SHOT.has(name) && (v === 'dashboard' || (v === 'history' && w < 700))) await page.screenshot({ path: path.join(out, `${name.replace(/[^a-z0-9]+/gi, '_')}_${v}.png`), fullPage: v === 'dashboard' && w < 1000 });
         }
+        // Panel con TODOS los desplegables de cobertura abiertos (listas largas de URLs, motivos, áreas)
+        await page.goto(base + '#/dashboard'); await page.waitForTimeout(800);
+        await page.evaluate(() => document.querySelectorAll('#coverage-box details').forEach(d => { d.open = true; }));
+        await page.waitForTimeout(200);
+        report.push({ name, view: 'cobertura abierta', layout: null, ...(await audit(page, touch)) });
+        if (SHOT.has(name) && w < 900) await page.screenshot({ path: path.join(out, `${name.replace(/[^a-z0-9]+/gi, '_')}_cobertura.png`), fullPage: true });
+
+        // Ventana de conexión de cuentas
+        await page.goto(base + '#/scan'); await page.waitForTimeout(500);
+        await page.evaluate(() => { openSessionGate(); document.getElementById('gate-debug') && 0; });
+        await page.waitForTimeout(500);
+        report.push({ name, view: 'ventana de cuentas', layout: null, ...(await audit(page, touch)),
+            modal: await page.evaluate(() => { const b = document.querySelector('#session-modal .modal-box').getBoundingClientRect(); return { inViewport: b.left >= -1 && b.right <= innerWidth + 1 && b.top >= -1 && b.bottom <= innerHeight + 1, h: Math.round(b.height) }; }) });
+        if (SHOT.has(name) && w < 900) await page.screenshot({ path: path.join(out, `${name.replace(/[^a-z0-9]+/gi, '_')}_cuentas.png`) });
+        await page.evaluate(() => closeSessionGate(true));
+
+        // Escaneo en curso (progreso + indicadores en vivo), simulado sin red
+        const live = await ctx.newPage();
+        live.on('pageerror', e => jsErrors.push(`${name} (en curso): ${e.message}`));
+        await live.route('**/api/scan/status', r => r.fulfill({ json: { busy: 'scanning', seconds: 40, progress: null } }));
+        await live.route('**/api/scan-stream', r => r.fulfill({ status: 200, headers: { 'content-type': 'text/event-stream' },
+            body: 'data: ' + JSON.stringify({ status: '[2/3 · ' + 'ONCOLOGÍA '.repeat(6) + '] Analizando (120/800): ' + LONG, progress: 41, step: 3, pagesRead: 1234, idsFound: 4321, elapsed: 3725,
+                live: { vencidos: 123, proximos: 45, vigentes: 678, retirados: 9, sinFecha: 210, total: 1065 } }) + '\n\n' }));
+        await live.goto(base + '#/dashboard'); await live.waitForTimeout(1500);
+        report.push({ name, view: 'escaneo en curso', layout: null, ...(await audit(live, touch)) });
+        if (SHOT.has(name) && w < 900) await live.screenshot({ path: path.join(out, `${name.replace(/[^a-z0-9]+/gi, '_')}_encurso.png`), fullPage: true });
+        await live.close();
+
         // Modal de detalle
         await page.goto(base + '#/dashboard'); await page.waitForTimeout(700);
         await page.click('#results-table-body tr:first-child button'); await page.waitForTimeout(400);
@@ -119,7 +205,7 @@ async function audit(page, touch) {
         if (SHOT.has(name) && w < 900) await page.screenshot({ path: path.join(out, `${name.replace(/[^a-z0-9]+/gi, '_')}_modal.png`) });
         await ctx.close();
     }
-    const bad = report.filter(r => r.docOverflow || (r.offscreen && r.offscreen.length) || (r.smallTargets && r.smallTargets.length) || (r.modal && !r.modal.inViewport));
+    const bad = report.filter(r => r.docOverflow || (r.clipped && r.clipped.length) || (r.offscreen && r.offscreen.length) || (r.smallTargets && r.smallTargets.length) || (r.modal && !r.modal.inViewport));
     console.log(JSON.stringify({ revisados: report.length, conProblemas: bad.length, jsErrors, problemas: bad }, null, 1));
     console.log('LAYOUTS:', [...new Set(report.filter(r => r.layout).map(r => `${r.name} => ${r.layout}`))].join(' | '));
     await browser.close(); srv.kill(); fs.rmSync(dataRoot, { recursive: true, force: true });

@@ -406,10 +406,44 @@ async function runQueue({ targetUrl, region, country, scanId, extraUrls, section
     const parts = sections.map(section => ({ label: section.label, section, summary: null, error: null, attempts: 0 }));
     let pause = config.queuePauseSeconds;
 
-    const progressFor = (idx, label) => (d) => {
-        const { done, error, ...rest } = d;
-        const overall = Math.floor(((idx + (d.progress || 0) / 100) / total) * 100);
-        sendSSE({ ...rest, progress: Math.min(overall, 99), status: `[${idx + 1}/${total} · ${label}] ${d.status}`, queue: { index: idx + 1, total, label } });
+    // Sumatoria entre áreas: lo ya terminado (deduplicado por ID) + lo que va llevando el área actual
+    const CODE = { 'VENCIDO': 'V', 'PROXIMO A VENCER': 'P', 'VIGENTE': 'G', 'RETIRADO': 'R' };
+    const baseTotals = () => {
+        const ids = new Map(), extra = new Set();
+        let pages = 0;
+        for (const p of parts) {
+            if (!p.summary) continue;
+            pages += (p.summary.coverage && p.summary.coverage.pagesRead) || 0;
+            for (const a of p.summary.assets || []) {
+                if (a.veevaApprovalId === 'SIN ID' || a.veevaApprovalId === 'SIN VERIFICAR') { extra.add(a.assetUrl); continue; }
+                const code = CODE[a.status] || 'S';
+                if (!ids.has(a.veevaApprovalId) || ids.get(a.veevaApprovalId) === 'S') ids.set(a.veevaApprovalId, code);
+            }
+        }
+        return { ids, extra: extra.size, pages };
+    };
+    const progressFor = (idx, label) => {
+        const base = baseTotals();   // solo cambia al terminar cada área
+        return (d) => {
+            const { done, error, ...rest } = d;
+            const overall = Math.floor(((idx + (d.progress || 0) / 100) / total) * 100);
+            const cur = d.live || {};
+            const ids = new Map(base.ids);
+            Object.entries(cur.ids || {}).forEach(([id, code]) => { if (!ids.has(id) || ids.get(id) === 'S') ids.set(id, code); });
+            const live = { vencidos: 0, proximos: 0, vigentes: 0, retirados: 0, sinFecha: 0, total: 0 };
+            ids.forEach((code) => {
+                if (code === 'V') live.vencidos++; else if (code === 'P') live.proximos++; else if (code === 'G') live.vigentes++;
+                else if (code === 'R') live.retirados++; else live.sinFecha++;
+            });
+            const extra = base.extra + (cur.extra || 0);
+            live.sinFecha += extra;
+            live.total = ids.size + extra;
+            sendSSE({
+                ...rest, live, progress: Math.min(overall, 99),
+                pagesRead: base.pages + (d.pagesRead || 0), idsFound: ids.size,
+                status: `[${idx + 1}/${total} · ${label}] ${d.status}`, queue: { index: idx + 1, total, label }
+            });
+        };
     };
     const wait = async (seconds, text, idx) => {
         for (let left = seconds; left > 0 && !queueCancelled; left--) {
@@ -427,7 +461,7 @@ async function runQueue({ targetUrl, region, country, scanId, extraUrls, section
             summary = await scannerEngine.runScan({
                 targetUrl, region, country, scanId, sections: [part.section],
                 extraUrls: idx === 0 && part.attempts === 1 ? extraUrls : [],
-                shotPrefix: `a${idx}t${part.attempts}s`
+                shotPrefix: `a${idx}t${part.attempts}s`, liveIds: true
             }, progressFor(idx, part.label));
         } catch (e) { err = e.message; }
         // En un reintento solo se sustituye el resultado si es mejor que el anterior
