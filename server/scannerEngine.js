@@ -62,7 +62,7 @@ const HIDE_OVERLAYS_CSS = `
 // imagenes (img, picture, srcset, fondos CSS), enlaces, PDF, videos, metas y canonical.
 // Recorre tambien Shadow DOM.
 function extractInFrame({ reSource, maxBgEls }) {
-    const out = { text: '', hits: [], images: [], pdfs: [], videos: [], links: [], metas: [], canonical: null };
+    const out = { text: '', hits: [], images: [], pdfs: [], videos: [], links: [], contentLinks: [], metas: [], canonical: null };
     if (!document.body) return out;
 
     const roots = [document];
@@ -167,7 +167,12 @@ function extractInFrame({ reSource, maxBgEls }) {
         out.links.push(a);
         if (isPdf(a)) out.pdfs.push({ href: a, text: text || '' });
     };
-    qsa('a[href], area[href]').forEach(a => addLink(a.href || a.getAttribute('href'), `${a.innerText || ''} ${a.title || ''}`));
+    qsa('a[href], area[href]').forEach(a => {
+        addLink(a.href || a.getAttribute('href'), `${a.innerText || ''} ${a.title || ''}`);
+        // Enlaces del contenido (no de la cabecera, el menú ni el pie, que son comunes a todo el sitio)
+        const u = abs(a.href || a.getAttribute('href'));
+        if (u && !a.closest('header, nav, footer, [role="navigation"], [role="contentinfo"], [role="banner"]')) out.contentLinks.push(u);
+    });
     qsa('[data-href], [data-url], [data-link]').forEach(el =>
         addLink(el.getAttribute('data-href') || el.getAttribute('data-url') || el.getAttribute('data-link'), el.innerText || ''));
     const onclickRe = /(?:location(?:\.href)?\s*=|window\.open\(|location\.assign\()\s*['"]([^'"]+)['"]/;
@@ -591,7 +596,7 @@ class ScannerEngine {
     }
 
     async extractPageData(page, baseDomain) {
-        const merged = { text: '', hits: [], images: [], pdfs: [], videos: [], links: [], metas: [], canonical: null };
+        const merged = { text: '', hits: [], images: [], pdfs: [], videos: [], links: [], contentLinks: [], metas: [], canonical: null };
         const args = { reSource: config.approvalIdRegex, maxBgEls: 4000 };
         for (const frame of page.frames()) {
             const isMain = frame === page.mainFrame();
@@ -606,6 +611,7 @@ class ScannerEngine {
                 merged.pdfs.push(...d.pdfs);
                 merged.videos.push(...d.videos);
                 merged.links.push(...d.links);
+                merged.contentLinks.push(...d.contentLinks);
                 merged.metas.push(...d.metas);
                 if (isMain) merged.canonical = d.canonical;
             } catch (e) {
@@ -875,17 +881,24 @@ class ScannerEngine {
             };
             const pendingPdfs = new Map(); // url -> pagina que lo enlaza
             // `explicit`: URL pedida por el usuario (semillas y URLs adicionales): no se filtra por área
-            const enqueue = (raw, depth, referrer, fromSitemap, explicit) => {
+            // Por áreas también se siguen las páginas (y subdominios) a las que enlaza el CONTENIDO del área aunque cuelguen
+            // de otra ruta; hasta MAX_HOPS saltos fuera de la ruta. Los enlaces del menú/pie no cuentan (llevarían a todo el sitio).
+            const MAX_HOPS = 2;
+            const enqueue = (raw, depth, referrer, fromSitemap, explicit, hop = 0, viaContent = false) => {
                 const c = this.canonicalize(raw);
                 if (!c || !this.isInScope(c, baseDomain)) return;
                 // La página "Mi cuenta" es la sonda fiable para comprobar la sesión de AzMed
                 if (authManager.isAccountUrl(c)) authManager.rememberProtectedUrl(baseDomain, c);
-                if (sectionMode && !explicit && !inSections(c, sections)) { noteOutOfScope(c); return; }
+                let nextHop = 0;
+                if (sectionMode && !explicit && !inSections(c, sections)) {
+                    if (!viaContent || fromSitemap || hop >= MAX_HOPS || BOILERPLATE.test(new URL(c).pathname)) { noteOutOfScope(c); return; }
+                    nextHop = hop + 1;
+                }
                 const path = new URL(c).pathname;
                 if (PDF_EXT.test(path)) { if (!pendingPdfs.has(c)) pendingPdfs.set(c, referrer || null); return; }
                 if (SKIP_EXT.test(path) || queued.has(c)) return;
                 queued.add(c);
-                (fromSitemap ? sitemapQueue : queue).push({ url: c, depth, fromSitemap: !!fromSitemap });
+                (fromSitemap ? sitemapQueue : queue).push({ url: c, depth, fromSitemap: !!fromSitemap, hop: nextHop });
             };
             // Por áreas se siembra la raíz de cada área; si no, la URL del sitio
             if (sectionMode) sections.forEach(s => enqueue(s.url, 0, null, false, true));
@@ -972,7 +985,7 @@ class ScannerEngine {
                 for (const e of await job) await registerAndQueue(e.id, 'PDF', pageUrl, absPdf, e.snippet, getShot);
             };
 
-            const processUrl = async (page, currentUrl, depth, fromSitemap) => {
+            const processUrl = async (page, currentUrl, depth, fromSitemap, hop = 0) => {
                 const nav = await this.navigate(page, currentUrl, waitWaf);
                 if (nav.download) {
                     // El enlace descarga un archivo (o la navegacion se aborto): si es PDF se lee como documento
@@ -1050,7 +1063,10 @@ class ScannerEngine {
                 emit(3, `Analizando (${coverage.pagesRead}/${total}): ${finalUrl}`,
                     Math.min(20 + Math.floor((coverage.pagesRead / Math.max(total, 1)) * 50), 70));
 
-                if (depth < config.maxDepth) data.links.forEach(l => enqueue(l, depth + 1, finalUrl));
+                if (depth < config.maxDepth) {
+                    const contentSet = new Set(data.contentLinks);
+                    data.links.forEach(l => enqueue(l, depth + 1, finalUrl, false, false, hop, contentSet.has(l)));
+                }
 
                 // La captura se toma por ID, centrada en donde aparece el codigo
                 const shotCache = new Map();
@@ -1201,7 +1217,7 @@ class ScannerEngine {
                             pages[index] = await context.newPage();
                             pages[index].on('dialog', d => d.dismiss().catch(() => {}));
                         }
-                        await processUrl(pages[index], item.url, item.depth, item.fromSitemap);
+                        await processUrl(pages[index], item.url, item.depth, item.fromSitemap, item.hop || 0);
                     } catch (e) {
                         fail(item.url, (e.message || String(e)).split('\n')[0]);
                     } finally {
