@@ -605,7 +605,19 @@ function onFullToggle() {
 
 function queueOn(sel) { return !fullSite && sel.length > 1 && $('mode-queue').checked; }
 
+function extraUrlList() { return $('extra-urls').value.split(/\s+/).map(s => s.trim()).filter(Boolean); }
+function onlyUrlsOn() { return $('only-urls').checked; }
+
 function updateStartState() {
+    if (onlyUrlsOn()) {
+        const n = extraUrlList().length;
+        $('queue-toggle').hidden = true;
+        $('btn-start-scan').disabled = scanRunning || !n;
+        $('start-hint').textContent = scanRunning ? 'Hay un escaneo en curso.'
+            : !n ? 'Pega al menos una URL en «Opciones avanzadas → URLs adicionales».'
+            : `Se analizará solo ${n === 1 ? 'esa URL' : `esas ${n} URLs`}, sin rastrear el resto del sitio.`;
+        return;
+    }
     const sel = fullSite ? [] : selectedSections();
     $('queue-toggle').hidden = fullSite || sel.length < 2;
     const missing = missingSessions();
@@ -621,12 +633,14 @@ function updateStartState() {
 // ---------- Escaneo ----------
 async function requestScan() {
     if (starting) return;
-    const sections = fullSite ? [] : selectedSections();
-    if (!fullSite && !sections.length) { setNotice('Marca al menos un área o elige el sitio completo.', true); return; }
-    if (fullSite && !confirm('Vas a analizar el sitio completo.\n\nUn rastreo completo hace cientos de peticiones seguidas y puede activar el firewall (WAF) del sitio, dejando el escaneo incompleto. Se recomienda analizar 1–2 áreas por escaneo.\n\n¿Continuar con el sitio completo?')) return;
+    const onlyUrls = onlyUrlsOn();
+    const sections = fullSite || onlyUrls ? [] : selectedSections();
+    if (onlyUrls && !extraUrlList().length) { setNotice('Pega al menos una URL para analizar solo esas páginas.', true); return; }
+    if (!onlyUrls && !fullSite && !sections.length) { setNotice('Marca al menos un área o elige el sitio completo.', true); return; }
+    if (!onlyUrls && fullSite && !confirm('Vas a analizar el sitio completo.\n\nUn rastreo completo hace cientos de peticiones seguidas y puede activar el firewall (WAF) del sitio, dejando el escaneo incompleto. Se recomienda analizar 1–2 áreas por escaneo.\n\n¿Continuar con el sitio completo?')) return;
     if (missingSessions().length) { openSessionGate(); return; }
     starting = true;
-    progressAreasText = sections.length ? `${queueOn(sections) ? 'Cola de áreas' : 'Áreas'}: ${sections.map(s => s.label).join(', ')}` : 'Sitio completo';
+    progressAreasText = onlyUrls ? `URLs indicadas (${extraUrlList().length})` : sections.length ? `${queueOn(sections) ? 'Cola de áreas' : 'Áreas'}: ${sections.map(s => s.label).join(', ')}` : 'Sitio completo';
     const btn = $('btn-start-scan');
     btn.disabled = true;
     btn.classList.add('is-loading');
@@ -638,7 +652,8 @@ async function requestScan() {
             targetUrl: $('target-url').value.trim(),
             region: $('region-select').value,
             country: $('country-select').value,
-            extraUrls: $('extra-urls').value.split(/\s+/).map(s => s.trim()).filter(Boolean),
+            extraUrls: extraUrlList(),
+            onlyUrls,
             sections: sections.map(({ label, url, exact, scope }) => ({ label, url, exact, scope })),
             queue: queueOn(sections)
         });

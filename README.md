@@ -52,6 +52,7 @@ Los sitios AZMED están detrás de un WAF que bloquea el tráfico automatizado c
 4. **Sitio completo** sigue disponible, con confirmación.
 
 Las páginas de un área publicadas fuera de su ruta no se rastrean: añádelas en *Opciones avanzadas → URLs adicionales*.
+Para analizar **solo una o varias páginas concretas**, pégalas ahí y marca *Analizar solo estas URLs*: no se detectan áreas, no se rastrean enlaces ni sitemap, y se leen únicamente esas páginas (con sus PDF, imágenes y videos) y sus Approval IDs en PromoMats.
 
 **Cola de áreas.** Con 2 o más áreas marcadas, «Escanear en cola» (activo por defecto) las analiza una por una con una pausa entre ellas (`QUEUE_PAUSE_SECONDS`, 45 s por defecto). Si una área sufre bloqueos del WAF o falla, la pausa se duplica y esa área se reintenta una vez al final. El resultado es un único informe consolidado (IDs deduplicados) con el detalle por área en *Cobertura*.
 

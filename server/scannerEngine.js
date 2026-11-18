@@ -630,6 +630,8 @@ class ScannerEngine {
             .filter(s => s && typeof s.url === 'string')
             .map(s => ({ label: String(s.label || s.url).slice(0, 60), url: s.url, exact: !!s.exact, scope: typeof s.scope === 'string' ? s.scope : undefined }));
         const sectionMode = sections.length > 0;
+        // Solo las URLs indicadas: sin rastreo, sin sitemap, sin subdominios y sin seguir enlaces
+        const onlyUrls = params.onlyUrls === true && extraUrls.length > 0;
         const scanId = params.scanId || Date.now().toString(36);
         const shotPrefix = String(params.shotPrefix || 's').replace(/[^a-z0-9_-]/gi, '') || 's';
         this.isCancelled = false;
@@ -639,7 +641,8 @@ class ScannerEngine {
 
         const startedAt = Date.now();
         const coverage = {
-            scope: sectionMode ? { mode: 'areas', sections: sections.map(s => s.label) } : { mode: 'full' },
+            scope: onlyUrls ? { mode: 'urls', urls: extraUrls.slice(0, 50) }
+                : sectionMode ? { mode: 'areas', sections: sections.map(s => s.label) } : { mode: 'full' },
             pagesRead: 0, pagesFailed: 0, failures: [],
             brokenLinks: 0, brokenLinkList: [],
             pagesNeedingLogin: 0, loginPages: [],
@@ -857,7 +860,9 @@ class ScannerEngine {
             // PASO 2: descubrimiento
             // Por áreas no se consulta crt.sh ni se leen sitemaps de subdominios: menos peticiones contra el WAF.
             let subs = [];
-            if (sectionMode) {
+            if (onlyUrls) {
+                emit(2, `Analizando solo ${extraUrls.length} URL(s) indicada(s)`, 12);
+            } else if (sectionMode) {
                 emit(2, `Escaneo por áreas: ${sections.map(s => s.label).join(', ')}`, 12);
             } else {
                 emit(2, `Descubriendo subdominios de ${baseDomain}...`, 12);
@@ -903,7 +908,8 @@ class ScannerEngine {
                 (fromSitemap ? sitemapQueue : queue).push({ url: c, depth, fromSitemap: !!fromSitemap, hop: nextHop });
             };
             // Por áreas se siembra la raíz de cada área; si no, la URL del sitio
-            if (sectionMode) {
+            if (onlyUrls) { /* solo las URLs indicadas (más abajo) */ }
+            else if (sectionMode) {
                 sections.forEach(s => enqueue(s.url, 0, null, false, true));
                 alias.seeds.forEach(u => enqueue(u, 0, null, false, true));   // rutas propias del área con otro prefijo
             }
@@ -917,8 +923,8 @@ class ScannerEngine {
             // Sitemap AEM de la pagina de inicio (ej. /es/home.html -> /es/home.sitemap.xml)
             const extraMaps = /\.html$/i.test(parsed.pathname)
                 ? [`${parsed.origin}${parsed.pathname.replace(/\.html$/i, '.sitemap.xml')}`] : [];
-            const origins = [...new Set(subs.map(s => this.canonicalize(s)).filter(Boolean).map(s => new URL(s).origin))];
-            if (!origins.includes(parsed.origin)) origins.unshift(parsed.origin);
+            const origins = onlyUrls ? [] : [...new Set(subs.map(s => this.canonicalize(s)).filter(Boolean).map(s => new URL(s).origin))];
+            if (!onlyUrls && !origins.includes(parsed.origin)) origins.unshift(parsed.origin);
             for (const origin of origins.slice(0, 25)) {
                 if (this.isCancelled) break;
                 emit(2, `Leyendo sitemap de ${origin}...`, 15);
@@ -1068,7 +1074,7 @@ class ScannerEngine {
                 emit(3, `Analizando (${coverage.pagesRead}/${total}): ${finalUrl}`,
                     Math.min(20 + Math.floor((coverage.pagesRead / Math.max(total, 1)) * 50), 70));
 
-                if (depth < config.maxDepth) {
+                if (!onlyUrls && depth < config.maxDepth) {
                     const contentSet = new Set(data.contentLinks);
                     data.links.forEach(l => enqueue(l, depth + 1, finalUrl, false, false, hop, contentSet.has(l)));
                 }

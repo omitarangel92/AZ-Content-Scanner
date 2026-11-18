@@ -207,8 +207,9 @@
                                 <summary>Opciones avanzadas</summary>
                                 <label class="field">
                                     <span>URLs adicionales (una por línea)</span>
-                                    <textarea id="extra-urls" rows="3" placeholder="Páginas de un área publicadas fuera de su ruta, micrositios o campañas"></textarea>
+                                    <textarea id="extra-urls" rows="3" oninput="updateStartState()" placeholder="Páginas de un área publicadas fuera de su ruta, micrositios o campañas"></textarea>
                                 </label>
+                                <label class="check"><input type="checkbox" id="only-urls" onchange="updateStartState()"> <span>Analizar solo estas URLs (sin rastrear áreas ni enlaces)</span></label>
                             </details>
                             <button id="btn-detect" class="btn btn-primary" onclick="detectSections()"><svg class="ico"><use href="#i-radar"/></svg>Detectar áreas del sitio</button>
                             <div id="detect-loader" class="loader-bar" role="progressbar" aria-label="Leyendo el menú del sitio" aria-busy="true" hidden><span></span></div>

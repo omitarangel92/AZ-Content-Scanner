@@ -318,6 +318,11 @@ app.post('/api/scan', heavy, wrap(async (req, res) => {
         return res.status(400).json({ success: false, error: `URLs adicionales inválidas o de dominios no autorizados: ${rejectedExtra.slice(0, 5).join(', ')}` });
     }
 
+    const onlyUrls = (req.body || {}).onlyUrls === true;
+    if (onlyUrls && !extraUrls.length) {
+        return res.status(400).json({ success: false, error: 'Pega al menos una URL para analizar solo esas páginas.' });
+    }
+
     if (busy === 'scanning' || runningScan || scannerEngine.isRunning()) {
         return res.status(409).json({ success: false, busy, error: 'Ya hay un escaneo en curso. Espera a que termine o cancélalo.' });
     }
@@ -377,10 +382,10 @@ app.post('/api/scan', heavy, wrap(async (req, res) => {
     res.json({ success: true, states, scanId, warning });
 
     // Cola de áreas: con 2+ áreas y queue=true se escanean una por una, con pausa, y se consolidan en un informe
-    const useQueue = (req.body || {}).queue === true && sections.length > 1;
+    const useQueue = (req.body || {}).queue === true && sections.length > 1 && !onlyUrls;
     const job = useQueue
         ? runQueue({ targetUrl, region, country, scanId, extraUrls, sections })
-        : scannerEngine.runScan({ targetUrl, region, country, scanId, extraUrls, sections }, sendSSE);
+        : scannerEngine.runScan({ targetUrl, region, country, scanId, extraUrls, sections: onlyUrls ? [] : sections, onlyUrls }, sendSSE);
     const promise = job
         .then(summary => saveScan(scanId, targetUrl, region, country, summary))
         .catch(err => {

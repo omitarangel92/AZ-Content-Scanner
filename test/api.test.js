@@ -133,6 +133,18 @@ test('escaneo por áreas: rechaza áreas de otro dominio o con URL inválida', a
     assert.equal(badUrl.status, 400);
 });
 
+test('solo estas URLs: exige al menos una URL válida del dominio; con una, sigue exigiendo las 2 sesiones', async () => {
+    const base = { targetUrl: 'https://www.azmed.cr', region: 'CAMCAR', country: 'CR', onlyUrls: true, sections: [] };
+    const none = await post('/api/scan', { ...base, extraUrls: [] });
+    assert.equal(none.status, 400);
+    assert.match(none.json.error, /al menos una URL/);
+    const foreign = await post('/api/scan', { ...base, extraUrls: ['https://www.otro-sitio.com/x.html'] });
+    assert.equal(foreign.status, 400);
+    const ok = await post('/api/scan', { ...base, extraUrls: ['https://www.azmed.cr/content/home/prescribing-information/trinidad-and-tobago.html'] });
+    assert.equal(ok.status, 409);   // pasa la validación; sin sesiones guardadas se detiene aquí
+    assert.equal(ok.json.sessionExpired, true);
+});
+
 test('diagnósticos desactivados por defecto', async () => {
     assert.equal((await request('GET', '/api/vault/inspect/CC-14803')).status, 404);
     assert.equal((await request('GET', '/api/capture-test?url=https://www.azmed.cr')).status, 404);
