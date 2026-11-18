@@ -739,10 +739,12 @@ function tickClock() { if (scanClockStart) $('prog-elapsed').textContent = fmtEl
 function startClock() { clearInterval(scanClockTimer); scanClockTimer = setInterval(tickClock, 1000); }
 function stopClock() { clearInterval(scanClockTimer); scanClockTimer = null; }
 
+let pendingFinish = null;   // último aviso de fin del motor, a la espera de que el resultado esté guardado
 let finishedAt = 0;   // cuándo terminó el último escaneo (evita re-enganchar el progreso mientras el servidor guarda)
 
 function attachProgress() {
     scanFinished = false;
+    pendingFinish = null;
     $('progress-card').hidden = false;
     scanRunning = true;
     shownScan = null;   // fuerza a pintar el escaneo en curso si se está en «Nuevo escaneo»
@@ -760,7 +762,9 @@ function attachProgress() {
         try { d = JSON.parse(ev.data); } catch (e) { return; }
         if (d.idle) return;
         updateProgressUI(d);
-        if (d.progress === 100 && (d.done || d.error)) finishProgress(d);
+        // Con progress 100 el motor aún está cerrando: se espera el evento `saved` (resultado ya guardado) o a que el servidor quede libre
+        if (d.saved) finishProgress(d);
+        else if (d.progress === 100 && (d.done || d.error)) { pendingFinish = d; pollIdle(); }
     };
     activeEventSource.onerror = () => {
         if (!scanFinished) $('progress-detail').textContent = 'Conexión interrumpida, reconectando… (el escaneo sigue en el servidor)';
@@ -770,16 +774,28 @@ function attachProgress() {
     progressPoll = setInterval(async () => {
         try {
             const { json: s } = await api('/api/scan/status');
-            if (s.busy !== 'scanning' && !scanFinished) finishProgress(null);
+            if (s.busy !== 'scanning' && !scanFinished) finishProgress(pendingFinish);
         } catch (e) {
             $('progress-detail').textContent = 'No hay respuesta del servidor. Si se cerró, reinícialo con "npm start".';
         }
-    }, 5000);
+    }, 2000);
+}
+
+// Consulta rápida del estado cuando el motor ya dijo «terminado»: sale en cuanto el servidor queda libre (resultado guardado)
+async function pollIdle() {
+    for (let i = 0; i < 120 && !scanFinished; i++) {
+        try {
+            const { json: s } = await api('/api/scan/status');
+            if (s.busy !== 'scanning') { finishProgress(pendingFinish); return; }
+        } catch (e) { /* el sondeo normal sigue */ }
+        await new Promise(r => setTimeout(r, 1000));
+    }
 }
 
 function finishProgress(d) {
     if (scanFinished) return;
     scanFinished = true;
+    pendingFinish = null;
     finishedAt = Date.now();
     tickClock(); stopClock();
     clearInterval(progressPoll);

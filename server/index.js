@@ -387,13 +387,19 @@ app.post('/api/scan', heavy, wrap(async (req, res) => {
     const job = useQueue
         ? runQueue({ targetUrl, region, country, scanId, extraUrls, sections })
         : scannerEngine.runScan({ targetUrl, region, country, scanId, extraUrls, sections: onlyUrls ? [] : sections, onlyUrls }, sendSSE);
+    // El motor avisa «terminado» (100 %) y todavía cierra navegadores y guarda sesiones antes de devolver el resumen:
+    // la pantalla debe esperar al evento `saved`, enviado cuando el resultado YA está guardado.
     const promise = job
-        .then(summary => saveScan(scanId, targetUrl, region, country, summary))
+        .then(summary => {
+            saveScan(scanId, targetUrl, region, country, summary);
+            sendSSE({ scanId, step: 4, status: 'Resultados guardados.', progress: 100, done: true, saved: true });
+        })
         .catch(err => {
             // Llegar aquí significa que no había nada que guardar (ver runScan: con hallazgos se devuelve un
             // resumen PARCIAL en lugar de lanzar el error)
             console.error('Escaneo terminado con error:', err.message);
             storage.deleteShots(scanId);
+            sendSSE({ scanId, step: 4, status: `El escaneo terminó con error: ${err.message}`, progress: 100, done: true, error: true, saved: true });
         })
         .finally(() => { runningScan = null; setBusy(null); });
     runningScan = { scanId, promise };
