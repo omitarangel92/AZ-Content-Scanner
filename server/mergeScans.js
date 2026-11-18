@@ -1,22 +1,24 @@
 // Cola de áreas: une los resúmenes de varios escaneos (uno por área) en un único informe consolidado.
 // Lógica pura, sin dependencias del motor.
 
+const { inSections } = require('./sections');
+
 const UNRESOLVED = new Set(['SIN FECHA FIABLE', 'ID NO ENCONTRADO']);
 const CAP = 300;
 const SUM_FIELDS = ['pagesRead', 'pagesFailed', 'brokenLinks', 'pagesNeedingLogin', 'wafBlocked', 'duplicatesSkipped',
     'sitemapUrls', 'sitemapStale', 'imagesOcr', 'imagesByNameOnly', 'pdfsFull', 'pdfsByNameOnly',
-    'videosChecked', 'videosWithoutId', 'hiddenTextIds'];
+    'videosChecked', 'videosWithoutId', 'videosUnverified', 'kalturaFailures', 'hiddenTextIds'];
 const LIST_FIELDS = ['failures', 'brokenLinkList', 'loginPages', 'sitemapStaleList'];
 
 // parts: [{ label, summary|null, error|null, attempts }]  (summary es el resultado de runScan para esa área)
-function mergeSummaries(parts, { scanId, durationSeconds } = {}) {
+function mergeSummaries(parts, { scanId, durationSeconds, sections } = {}) {
     const done = parts.filter(p => p.summary);
     const byKey = new Map();     // ID de aprobación → fila consolidada
     const noId = new Map();      // assetUrl → fila "SIN ID"
 
     for (const p of done) {
         for (const a of p.summary.assets || []) {
-            if (a.veevaApprovalId === 'SIN ID') {
+            if (a.veevaApprovalId === 'SIN ID' || a.veevaApprovalId === 'SIN VERIFICAR') {
                 if (!noId.has(a.assetUrl) && noId.size < 200) noId.set(a.assetUrl, { ...a });
                 continue;
             }
@@ -50,6 +52,10 @@ function mergeSummaries(parts, { scanId, durationSeconds } = {}) {
     };
     SUM_FIELDS.forEach(f => { coverage[f] = done.reduce((n, p) => n + (p.summary.coverage[f] || 0), 0); });
     LIST_FIELDS.forEach(f => { coverage[f] = done.flatMap(p => p.summary.coverage[f] || []).slice(0, CAP); });
+
+    // Páginas fuera de las áreas: se unen las de todos los escaneos y se quitan las que otra área elegida sí cubre
+    coverage.outOfScope = [...new Set(done.flatMap(p => p.summary.coverage.outOfScope || []))]
+        .filter(u => !sections || !inSections(u, sections)).slice(0, 300);
 
     const overlays = new Map();
     for (const p of done) for (const o of p.summary.coverage.acceptedOverlays || []) overlays.set(o.text, (overlays.get(o.text) || 0) + o.times);

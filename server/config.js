@@ -2,7 +2,7 @@ require('dotenv').config();
 const path = require('path');
 const os = require('os');
 
-// Dónde se guardan sesiones (cookies/tokens de AstraZeneca, PromoMats, Kaltura), historial y capturas.
+// Dónde se guardan sesiones (cookies/tokens de AstraZeneca y PromoMats), historial y capturas.
 // Dentro de una carpeta de OneDrive se sincronizarían a la nube (chmod 0600 no protege en Windows),
 // así que en ese caso se usan datos locales del usuario. DATA_DIR permite elegir otra ruta.
 function resolveDataRoot() {
@@ -33,6 +33,19 @@ module.exports = {
     vaultDateFormat: process.env.VAULT_DATE_FORMAT === 'mdy' ? 'mdy' : 'dmy',
     maxPages: parseInt(process.env.MAX_PAGES || '800', 10),
     // Cola de áreas: pausa entre áreas (segundos) para no saturar el WAF; se duplica si una área sufre bloqueos
+    // Tiempo máximo (ms) para que un portal resuelva el acceso al validar una sesión (el login corporativo es lento)
+    sessionSettleMs: Math.max(10, Math.min(180, parseInt(process.env.SESSION_SETTLE_SECONDS || '60', 10))) * 1000,
+    // Cada cuántos minutos se "toca" cada sesión guardada para que no caduque por inactividad (0 = desactivado)
+    sessionKeepAliveMinutes: Math.max(0, Math.min(240, parseInt(process.env.SESSION_KEEPALIVE_MINUTES || '20', 10))),
+    // PromoMats: espera máxima del campo de búsqueda y de los resultados (ms). Con red lenta, subir estos valores.
+    vaultStepTimeoutMs: Math.max(3, Math.min(60, parseInt(process.env.VAULT_STEP_TIMEOUT_SECONDS || '10', 10))) * 1000,
+    vaultSearchTimeoutMs: Math.max(8, Math.min(120, parseInt(process.env.VAULT_SEARCH_TIMEOUT_SECONDS || '25', 10))) * 1000,
+    // Kaltura (metadatos anónimos de videos): espera por petición y reintentos. La red corporativa suele ser lenta.
+    kalturaTimeoutMs: Math.max(5, Math.min(90, parseInt(process.env.KALTURA_TIMEOUT_SECONDS || '25', 10))) * 1000,
+    kalturaRetries: Math.max(0, Math.min(4, parseInt(process.env.KALTURA_RETRIES || '2', 10))),
+    // Caché de resultados de PromoMats con fecha entre escaneos (horas; 0 = desactivada). El ID del pie de página se
+    // repite en cientos de páginas y en cada área: se consulta una vez y los resultados son coherentes entre escaneos.
+    vaultCacheHours: Math.max(0, Math.min(168, parseInt(process.env.VAULT_CACHE_HOURS || '12', 10))),
     queuePauseSeconds: Math.max(0, Math.min(600, parseInt(process.env.QUEUE_PAUSE_SECONDS || '45', 10))),
     maxDepth: parseInt(process.env.MAX_DEPTH || '6', 10),
     pageTimeout: parseInt(process.env.PAGE_TIMEOUT_MS || '25000', 10),
@@ -43,7 +56,7 @@ module.exports = {
     vaultConcurrency: Math.max(1, Math.min(5, parseInt(process.env.VAULT_CONCURRENCY || '3', 10))),
     // Pestañas que rastrean el sitio en paralelo (valores altos pueden activar el WAF del sitio)
     crawlConcurrency: Math.max(1, Math.min(6, parseInt(process.env.CRAWL_CONCURRENCY || '3', 10))),
-    pageRetries: Math.max(0, Math.min(3, parseInt(process.env.PAGE_RETRIES || '1', 10))),
+    pageRetries: Math.max(0, Math.min(3, parseInt(process.env.PAGE_RETRIES || '2', 10))),
     // URL protegida de AzMed para comprobar si la sesion sigue activa (la home publica siempre carga)
     azmedProbeUrl: process.env.AZMED_PROBE_URL || '',
 
@@ -63,8 +76,6 @@ module.exports = {
             host: process.env.VAULT_HOST || ''
         },
         kaltura: {
-            label: 'Kaltura KMC',
-            loginUrl: 'https://kmc.kaltura.com/index.php/kmcng/login',
             partnerId: process.env.KALTURA_PARTNER_ID || '',
             serviceUrl: process.env.KALTURA_SERVICE_URL || 'https://www.kaltura.com'
         }

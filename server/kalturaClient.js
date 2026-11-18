@@ -23,12 +23,34 @@ class KalturaClient {
     // resto del rastreo. El fetch nativo de Node no confía en el certificado del proxy (zScaler) y fallaba
     // en silencio. Sin `request` se usa fetch (compatibilidad).
     async getJson(url, request) {
-        if (request) {
-            const res = await request.get(url, { timeout: 10000 });
-            return res.json();
+        const timeout = config.kalturaTimeoutMs;
+        let lastError;
+        for (let attempt = 0; attempt <= config.kalturaRetries; attempt++) {
+            try {
+                if (request) {
+                    const res = await request.get(url, { timeout });
+                    return await res.json();
+                }
+                const res = await fetch(url, { signal: AbortSignal.timeout(timeout) });
+                return await res.json();
+            } catch (e) {
+                lastError = e;
+                if (attempt < config.kalturaRetries) await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+            }
         }
-        const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
-        return res.json();
+        throw lastError;
+    }
+
+    // La sesión de widget es la misma para todos los videos de un partner: se reutiliza 10 min (la mitad de peticiones)
+    async widgetKs(base, partnerId, request) {
+        this.ksCache = this.ksCache || new Map();
+        const key = base + '|' + partnerId;
+        const hit = this.ksCache.get(key);
+        if (hit && Date.now() - hit.at < 10 * 60 * 1000) return hit.ks;
+        const ksJson = await this.getJson(`${base}/api_v3/service/session/action/startWidgetSession?widgetId=_${partnerId}&format=1`, request);
+        if (!ksJson.ks) return null;
+        this.ksCache.set(key, { ks: ksJson.ks, at: Date.now() });
+        return ksJson.ks;
     }
 
     async getEntryMetadata(src, request) {
@@ -38,12 +60,11 @@ class KalturaClient {
 
         try {
             const base = config.services.kaltura.serviceUrl;
-            const ksJson = await this.getJson(
-                `${base}/api_v3/service/session/action/startWidgetSession?widgetId=_${partnerId}&format=1`, request);
-            if (!ksJson.ks) return { ok: false, reason: 'No se obtuvo sesión de widget' };
+            const ks = await this.widgetKs(base, partnerId, request);
+            if (!ks) return { ok: false, reason: 'No se obtuvo sesión de widget' };
 
             const entry = await this.getJson(
-                `${base}/api_v3/service/baseEntry/action/get?entryId=${encodeURIComponent(entryId)}&ks=${encodeURIComponent(ksJson.ks)}&format=1`, request);
+                `${base}/api_v3/service/baseEntry/action/get?entryId=${encodeURIComponent(entryId)}&ks=${encodeURIComponent(ks)}&format=1`, request);
             if (!entry || entry.objectType === 'KalturaAPIException') {
                 return { ok: false, reason: (entry && entry.message) || 'Entry no accesible' };
             }

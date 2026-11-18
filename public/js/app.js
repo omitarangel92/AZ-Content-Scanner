@@ -18,8 +18,8 @@ let lastFocus = null;
 
 // En móvil se pintan menos tarjetas por vez (cada fila ocupa más alto que en la tabla)
 const PAGE_SIZE = window.matchMedia('(max-width: 640px)').matches ? 25 : 100;
-const SERVICES = ['azmed', 'promomats', 'kaltura'];
-const SERVICE_LABEL = { azmed: 'AzMed', promomats: 'PromoMats', kaltura: 'Kaltura' };
+const SERVICES = ['azmed', 'promomats'];
+const SERVICE_LABEL = { azmed: 'AzMed', promomats: 'PromoMats' };
 const MAIN_STATUSES = ['VENCIDO', 'PROXIMO A VENCER', 'VIGENTE', 'RETIRADO'];
 const STATUS_ORDER = { 'VENCIDO': 0, 'PROXIMO A VENCER': 1, 'RETIRADO': 2, 'VIGENTE': 4 };
 
@@ -158,6 +158,12 @@ window.addEventListener('DOMContentLoaded', async () => {
         console.error('Error de inicialización:', e);
         setServerPill('err', 'Sin conexión');
     }
+    // Si el servidor está escaneando y esta pantalla no lo sabe (escaneo lanzado desde otra pestaña, recarga…), se engancha
+    setInterval(async () => {
+        if (scanRunning || document.hidden || Date.now() - finishedAt < 15000) return;
+        const s = await checkBusy();
+        if (s && s.busy === 'scanning' && !scanRunning) attachProgress();
+    }, 6000);
 });
 
 // ---------- Config y selectores ----------
@@ -250,12 +256,11 @@ function renderSessionStates(states) {
     updateStartState();
 }
 
-// Las 3 cuentas son obligatorias: sin PromoMats no hay fechas con las que comparar los Approval IDs,
-// y AzMed y Kaltura dan acceso a las páginas protegidas y a los videos.
+// Las 2 cuentas son obligatorias: sin PromoMats no hay fechas con las que comparar los Approval IDs,
+// y AzMed da acceso a las páginas protegidas. (Kaltura ya no necesita sesión.)
 const SESSION_WHY = {
     azmed: 'páginas protegidas del sitio',
-    promomats: 'fechas de vencimiento de los Approval IDs',
-    kaltura: 'metadatos de los videos'
+    promomats: 'fechas de vencimiento de los Approval IDs'
 };
 
 function missingSessions() {
@@ -334,7 +339,7 @@ async function clearSession(service) {
 // ---------- Ventana de conexión de cuentas ----------
 // Se abre al pulsar «Iniciar escaneo» si falta alguna cuenta o está expirada. Cada cuenta se conecta en su ventana de
 // navegador (el servidor detecta solo cuando el login termina); aquí se vigila el estado, se validan las cuentas y,
-// cuando están las 3 activas, el escaneo arranca automáticamente.
+// cuando están las 2 activas, el escaneo arranca automáticamente.
 let gateTimer = null;
 let gateBusy = false;
 let gateValidated = false;
@@ -342,6 +347,9 @@ let gateErrRetries = 0;
 
 function gateState(svc) { return (sessionStates[svc] || {}).state || 'none'; }
 const GATE_LOGIN = ['none', 'expired'];   // «error» es un fallo al comprobar (no falta el login): se reintenta sola
+// El botón «Iniciar sesión» está disponible SIEMPRE que la cuenta no esté conectada ni esperando login: nunca hay que
+// esperar a que termine una validación lenta para poder iniciar sesión a mano.
+const gateCanLogin = (st) => st !== 'active' && st !== 'waiting';
 
 function renderSessionGate(msg) {
     const label = { active: ['badge-success', 'Conectada'], waiting: ['badge-info', 'Esperando tu inicio de sesión…'],
@@ -354,13 +362,13 @@ function renderSessionGate(msg) {
             '<div class="gate-info"><strong>' + SERVICE_LABEL[svc] + '</strong><small>' + esc(SESSION_WHY[svc]) + '</small></div>' +
             '<span class="badge ' + cls + '">' + text + '</span>' +
             '<div class="gate-actions">' +
-            (GATE_LOGIN.includes(st) || (st === 'error' && gateErrRetries >= 2) ? '<button class="btn btn-primary btn-sm" onclick="startSession(\'' + svc + '\')">Iniciar sesión</button>' : '') +
+            (gateCanLogin(st) ? '<button class="btn btn-primary btn-sm" onclick="startSession(\'' + svc + '\')">Iniciar sesión</button>' : '') +
             (st === 'waiting' ? '<button class="btn btn-success btn-sm" onclick="finishSession(\'' + svc + '\')">✔ Terminé</button>' : '') +
             '</div></div>';
     }).join('');
     if (msg !== undefined) $('gate-status').textContent = msg;
     $('gate-loader').hidden = !(gateBusy || SERVICES.some(s => ['waiting', 'unknown'].includes(gateState(s))));
-    $('gate-connect').hidden = !SERVICES.some(s => GATE_LOGIN.includes(gateState(s)));
+    $('gate-connect').hidden = !SERVICES.some(s => gateCanLogin(gateState(s)));
 }
 
 async function gateTick() {
@@ -384,7 +392,7 @@ async function gateTick() {
         renderSessionStates(sessionStates);
         if (SERVICES.every(s => gateState(s) === 'active')) {
             closeSessionGate(false);
-            toast('Las 3 cuentas están validadas. Iniciando el escaneo…', 'ok');
+            toast('Las 2 cuentas están validadas. Iniciando el escaneo…', 'ok');
             requestScan();
             return;
         }
@@ -403,7 +411,7 @@ async function gateTick() {
 function openSessionGate() {
     gateValidated = false;
     gateErrRetries = 0;
-    renderSessionGate('Conecta las cuentas marcadas; el escaneo empezará solo cuando estén las 3 activas.');
+    renderSessionGate('Conecta las cuentas marcadas; el escaneo empezará solo cuando estén las 2 activas.');
     $('session-modal').hidden = false;
     clearInterval(gateTimer);
     gateTimer = setInterval(gateTick, 2000);
@@ -422,7 +430,7 @@ function closeSessionGate(cancelPending) {
 
 // Abre la ventana de login de todas las cuentas que faltan (una tras otra, con una breve pausa)
 async function gateConnectAll() {
-    for (const svc of SERVICES.filter(s => GATE_LOGIN.includes(gateState(s)))) {
+    for (const svc of SERVICES.filter(s => gateCanLogin(gateState(s)))) {
         await startSession(svc);
         await new Promise(r => setTimeout(r, 700));
     }
@@ -654,13 +662,27 @@ async function requestScan() {
     }
 }
 
+// Panel "en vivo": mientras hay un escaneo en curso, el panel muestra ESE escaneo (todo en ceros hasta que termine) y no
+// el anterior. Los escaneos anteriores siguen disponibles en la pestaña Historial.
+function renderLiveEmpty() {
+    const url = $('target-url').value;
+    renderScan({ scanId: '_live', live: true, assets: [], targetUrl: url, date: new Date().toISOString(), sections: null, outcome: '' }, false);
+    $('last-scan-meta').textContent = 'Escaneo en curso';
+    $('results-subtitle').textContent = `${url}${progressAreasText ? ` · ${progressAreasText}` : ''} · los resultados aparecen al terminar`;
+    $('results-badge').innerHTML = '<span class="badge badge-info">EN CURSO</span>';
+    $('coverage-box').innerHTML = '';
+}
+
+let finishedAt = 0;   // cuándo terminó el último escaneo (evita re-enganchar el progreso mientras el servidor guarda)
+
 function attachProgress() {
     scanFinished = false;
     $('progress-card').hidden = false;
+    scanRunning = true;
+    renderLiveEmpty();
     $('progress-site').textContent = progressAreasText ? `${$('target-url').value} · ${progressAreasText}` : $('target-url').value;
     resetProgress();
     setServerPill('busy', 'Escaneando…');
-    scanRunning = true;
     updateStartState();
 
     if (activeEventSource) activeEventSource.close();
@@ -690,6 +712,7 @@ function attachProgress() {
 function finishProgress(d) {
     if (scanFinished) return;
     scanFinished = true;
+    finishedAt = Date.now();
     clearInterval(progressPoll);
     if (activeEventSource) { activeEventSource.close(); activeEventSource = null; }
     setTimeout(async () => {
@@ -783,7 +806,7 @@ function renderScan(scan, fromHistory) {
     if (fromHistory) {
         banner.hidden = false;
         banner.innerHTML = `<span>Estás viendo un escaneo del historial.</span>
-            <button class="btn btn-ghost btn-sm" onclick="backToLatest()">Volver al último escaneo</button>`;
+            <button class="btn btn-ghost btn-sm" onclick="backToLatest()">${scanRunning ? 'Volver al escaneo en curso' : 'Volver al último escaneo'}</button>`;
     } else { banner.hidden = true; banner.innerHTML = ''; }
 
     const types = [...new Set((scan.assets || []).map(a => a.type).filter(Boolean))].sort();
@@ -797,7 +820,10 @@ function renderScan(scan, fromHistory) {
     renderAssetsTable();
 }
 
-function backToLatest() { if (latestScan) renderScan(latestScan, false); }
+function backToLatest() {
+    if (scanRunning) renderLiveEmpty();             // con un escaneo en curso, "volver" es volver a ese escaneo
+    else if (latestScan) renderScan(latestScan, false);
+}
 
 // Indicadores del panel: índice de cumplimiento, distribución por estado y calendario de vencimientos
 function renderInsights(b, assets) {
@@ -859,10 +885,17 @@ function renderInsights(b, assets) {
         : '<p class="empty-chart">No hay vencimientos con fecha en los próximos 6 meses.</p>';
 }
 
+let coverageOutOfScope = [];
+async function copyOutOfScope() {
+    try { await navigator.clipboard.writeText(coverageOutOfScope.join('\n')); toast('Lista copiada. Pégala en «URLs adicionales».', 'ok'); }
+    catch (e) { toast('No se pudo copiar; selecciona la lista manualmente.', 'err'); }
+}
+
 function renderCoverage(scan) {
     const c = scan.coverage;
     const box = $('coverage-box');
     if (!c) { box.innerHTML = ''; return; }
+    coverageOutOfScope = c.outOfScope || [];
     const list = (arr, fmt, n) => (arr || []).slice(0, n).map(fmt).join('');
     const code = (u) => `<li><code>${esc(u)}</code></li>`;
     const reasons = list(c.partialReasons, r => `<li>${esc(r)}</li>`, 50);
@@ -878,9 +911,11 @@ function renderCoverage(scan) {
                 ${cell(c.pagesRead, 'Páginas leídas')}${cell(c.pagesFailed, 'Con error')}${cell(c.brokenLinks, 'Enlaces rotos (404)')}
                 ${cell(c.pagesNeedingLogin, 'Exigen sesión')}${cell(c.imagesOcr, 'Imágenes con OCR')}${cell(c.imagesByNameOnly, 'Imágenes por nombre')}
                 ${cell(c.pdfsFull, 'PDF completos')}${cell(c.pdfsByNameOnly, 'PDF por nombre')}${cell(c.videosChecked, 'Videos revisados')}
+                ${c.videosUnverified ? cell(c.videosUnverified, 'Videos sin verificar (Kaltura)') : ''}
                 ${c.sitemapUrls !== undefined ? cell(c.sitemapUrls, 'URLs en sitemaps') + cell(c.sitemapStale, 'Sitemap obsoletas') +
                     cell(c.duplicatesSkipped, 'Duplicadas omitidas') + cell(c.hiddenTextIds, 'IDs en contenido oculto') + cell(c.wafBlocked, 'Bloqueadas por WAF') : ''}
             </div>
+            ${c.sitemapDiscarded ? `<p class="hint">Se descartaron ${esc(c.sitemapDiscarded)} URLs del sitemap porque estaba obsoleto (todas daban 404): menos peticiones contra el WAF.</p>` : ''}
             ${c.scope && c.scope.mode === 'areas' ? `<p class="hint">Áreas analizadas: ${esc(c.scope.sections.join(', '))}</p>` : ''}
             ${(c.areas || []).length ? `<details open><summary>Resultado por área (${c.areas.length})</summary><ul>${c.areas.map(x => `<li><strong>${esc(x.label)}</strong>: ${esc(x.status)} · ${esc(x.pagesRead)} páginas · ${esc(x.idsFound)} IDs${x.attempts > 1 ? ' · reintentada' : ''}${x.error ? ` · ${esc(x.error)}` : ''}</li>`).join('')}</ul></details>` : ''}
             ${(c.acceptedOverlays || []).length ? `<p class="hint">Botones pulsados automáticamente: ${c.acceptedOverlays.map(o => `"${esc(o.text)}" ×${esc(o.times)}`).join(', ')}</p>` : ''}
@@ -888,6 +923,9 @@ function renderCoverage(scan) {
             ${fails ? `<details><summary>Páginas con error (${c.pagesFailed})</summary><ul>${fails}</ul></details>` : ''}
             ${broken ? `<details><summary>Enlaces rotos (${c.brokenLinks})</summary><ul>${broken}</ul></details>` : ''}
             ${login ? `<details><summary>Páginas que pidieron sesión (${c.pagesNeedingLogin})</summary><ul>${login}</ul></details>` : ''}
+            ${(c.outOfScope || []).length ? `<details><summary>Páginas fuera de las áreas elegidas (${c.outOfScope.length})</summary>
+                <p class="hint">Se encontraron enlaces a estas páginas pero no se analizaron. Cópialas y pégalas en «Opciones avanzadas → URLs adicionales» (Nuevo escaneo) para incluirlas.</p>
+                <button class="btn btn-ghost btn-sm" onclick="copyOutOfScope()">Copiar lista</button><ul>${list(c.outOfScope, code, 300)}</ul></details>` : ''}
             ${stale ? `<details><summary>URLs de sitemap que ya no existen (${c.sitemapStale})</summary><ul>${stale}</ul></details>` : ''}
         </details>`;
 }
@@ -952,7 +990,9 @@ function renderAssetsTable() {
     $('clear-filter').hidden = !filtering;
 
     if (!assets || !assets.length) {
-        tbody.innerHTML = `<tr><td colspan="8" class="empty-row">${shownScan ? 'El escaneo no encontró Approval IDs.' : 'Los activos encontrados aparecerán aquí.'}</td></tr>`;
+        const msg = shownScan && shownScan.live ? 'El escaneo en curso mostrará aquí sus resultados al terminar.'
+            : shownScan ? 'El escaneo no encontró Approval IDs.' : 'Los activos encontrados aparecerán aquí.';
+        tbody.innerHTML = `<tr><td colspan="8" class="empty-row">${msg}</td></tr>`;
         $('assets-count').textContent = '';
         $('btn-more').hidden = true;
         return;
@@ -1129,7 +1169,7 @@ async function openHistoryScan(scanId) {
     try {
         const { res, json } = await api(`/api/history/${encodeURIComponent(scanId)}`);
         if (!res.ok || !json.scan) throw new Error('not found');
-        renderScan(json.scan, !latestScan || latestScan.scanId !== json.scan.scanId);
+        renderScan(json.scan, scanRunning || !latestScan || latestScan.scanId !== json.scan.scanId);
         goTo('dashboard');
     } catch (e) { toast('No se pudo abrir el escaneo.', 'err'); }
 }

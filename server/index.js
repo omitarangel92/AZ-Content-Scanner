@@ -57,6 +57,7 @@ app.get('/api/token', (req, res) => res.json({ token: security.TOKEN }));
 
 let sseClients = [];
 let lastScanResult = null;
+let lastTargetUrl = null;   // última URL escaneada/validada: la usa el mantenimiento de sesiones
 let busy = null; // null | 'validating' | 'scanning'
 let busySince = 0;
 let runningScan = null;   // { scanId, promise } mientras hay un escaneo real
@@ -144,12 +145,12 @@ app.post('/api/scan/reset', (req, res) => {
 // ---------- Sesiones manuales ----------
 app.post('/api/session/start', heavy, wrap(async (req, res) => {
     const { service, url } = req.body || {};
-    if (!['azmed', 'promomats', 'kaltura'].includes(service)) {
+    if (!['azmed', 'promomats'].includes(service)) {
         return res.status(400).json({ success: false, error: 'Servicio inválido.' });
     }
 
     // AzMed: se abre una pagina protegida ("Mi cuenta") para que el sitio pida el login y, al terminar,
-    // se pueda detectar que la sesion quedo activa. Kaltura: la lista de contenidos (redirige al login).
+    // se pueda detectar que la sesion quedo activa.
     let loginUrl = url;
     let protectedStart = true;
     if (service === 'azmed') {
@@ -157,7 +158,6 @@ app.post('/api/session/start', heavy, wrap(async (req, res) => {
         protectedStart = loginUrl !== url;
     }
     if (service === 'promomats') loginUrl = config.services.promomats.loginUrl;
-    if (service === 'kaltura') loginUrl = 'https://kmc.kaltura.com/index.php/kmcng/content/entries/list';
 
     try {
         const u = new URL(loginUrl);
@@ -199,6 +199,7 @@ app.post('/api/session/validate', heavy, wrap(async (req, res) => {
     setBusy('validating');
     try {
         const { services, targetUrl } = req.body || {};
+        if (typeof targetUrl === 'string' && /^https?:\/\//i.test(targetUrl)) lastTargetUrl = targetUrl;
         const states = await authManager.validateAll(services, targetUrl);
         res.json({ states });
     } catch (e) {
@@ -337,16 +338,17 @@ app.post('/api/scan', heavy, wrap(async (req, res) => {
         return res.status(400).json({ success: false, error: 'URL objetivo inválida.' });
     }
 
-    // 1) Las 3 sesiones son OBLIGATORIAS y deben estar activas: sin PromoMats no hay fechas con las que comparar los
-    //    Approval IDs (antes se escaneaba igual y todo salía "Sin fecha" tras 30 minutos), y AzMed y Kaltura dan
-    //    acceso a las páginas protegidas y a los videos.
-    const REQUIRED = ['azmed', 'promomats', 'kaltura'];
-    const LABEL = { azmed: 'AzMed', promomats: 'PromoMats', kaltura: 'Kaltura' };
+    lastTargetUrl = targetUrl;
+    // 1) Las 2 sesiones son OBLIGATORIAS y deben estar activas: sin PromoMats no hay fechas con las que comparar los
+    //    Approval IDs (antes se escaneaba igual y todo salía "Sin fecha" tras 30 minutos), y AzMed da acceso a las
+    //    páginas protegidas. Kaltura no necesita sesión: sus metadatos se leen con una sesión de widget anónima.
+    const REQUIRED = ['azmed', 'promomats'];
+    const LABEL = { azmed: 'AzMed', promomats: 'PromoMats' };
     const missing = REQUIRED.filter(s => !authManager.hasSession(s));
     if (missing.length) {
         return res.status(409).json({
             success: false, sessionExpired: true, missing, states: authManager.getSessionStates(),
-            error: `Faltan sesiones: ${missing.map(s => LABEL[s]).join(', ')}. Conéctalas en "Cuentas": el escaneo necesita las 3 (AzMed, PromoMats y Kaltura) para comparar los Approval IDs con PromoMats.`
+            error: `Faltan sesiones: ${missing.map(s => LABEL[s]).join(', ')}. Conéctalas en "Cuentas": el escaneo necesita las 2 (AzMed y PromoMats) para comparar los Approval IDs con PromoMats.`
         });
     }
 
@@ -455,7 +457,7 @@ async function runQueue({ targetUrl, region, country, scanId, extraUrls, section
         sendSSE({ scanId, step: 4, status: `Error: ${msg}`, progress: 100, error: true });
         throw new Error(msg);
     }
-    const merged = mergeSummaries(parts, { scanId, durationSeconds: Math.floor((Date.now() - startedAt) / 1000) });
+    const merged = mergeSummaries(parts, { scanId, durationSeconds: Math.floor((Date.now() - startedAt) / 1000), sections });
     sendSSE({ scanId, step: 4, status: merged.outcome === 'PARCIAL' ? 'Cola finalizada de forma PARCIAL.' : 'Cola finalizada.', progress: 100, done: true });
     return merged;
 }
@@ -603,4 +605,16 @@ process.on('SIGTERM', () => shutdown(0));
 app.listen(config.port, config.host, () => {
     console.log(`AZ Content Scanner activo en http://localhost:${config.port} (escuchando en ${config.host})`);
     console.log(`Sesiones, historial y capturas en: ${config.dataRoot}`);
+
+    // Mantenimiento de sesiones: cada N minutos se abre cada servicio con su sesión guardada (cuenta como actividad y
+    // evita el cierre por inactividad) y se guardan las cookies renovadas. No actúa durante un escaneo.
+    if (config.sessionKeepAliveMinutes > 0) {
+        console.log(`Mantenimiento de sesiones cada ${config.sessionKeepAliveMinutes} min (SESSION_KEEPALIVE_MINUTES=0 lo desactiva).`);
+        const tick = () => {
+            if (busy || runningScan || scannerEngine.isRunning()) return;
+            const target = lastTargetUrl || (scanHistory[0] && scanHistory[0].targetUrl) || null;
+            authManager.keepAlive(target).catch(e => console.error('[mantenimiento de sesiones]', e.message));
+        };
+        setInterval(tick, config.sessionKeepAliveMinutes * 60 * 1000).unref();
+    }
 });

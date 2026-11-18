@@ -34,13 +34,13 @@ La aplicación tiene cuatro vistas (barra lateral):
 | **Panel** | KPIs (vencidos, por vencer, vigentes, retirados, por revisar), índice de cumplimiento, distribución, calendario de vencimientos y tabla de materiales con filtros, orden, detalle y revisión manual. Exporta CSV o imprime un informe. |
 | **Nuevo escaneo** | Elegir el sitio, **detectar las áreas del menú** (HOME, ONCOLOGÍA, CVRM…) y marcar cuáles analizar, o elegir el sitio completo. El progreso se ve en cualquier vista. |
 | **Historial** | Los últimos 10 escaneos; al abrir uno se muestra en el Panel. |
-| **Cuentas** | Conectar y comprobar las sesiones de AzMed, PromoMats y Kaltura. |
+| **Cuentas** | Conectar y comprobar las sesiones de AzMed y PromoMats. |
 
 1. En **Cuentas**, pulsa *Iniciar sesión* en cada servicio: se abre una ventana de Chromium, inicia sesión (incluido MFA) y pulsa *Terminé*.
 2. En **Nuevo escaneo**, elige el sitio y pulsa *Iniciar escaneo* (un sitio completo tarda 20–40 min).
 3. Revisa los resultados en el **Panel**. En *Detalle* puedes marcar si la detección es correcta (alimenta la precisión/recall) o reportar un ID no detectado.
 
-**Las 3 sesiones (AzMed, PromoMats y Kaltura) son obligatorias**: el servidor no inicia el escaneo si falta alguna o está expirada. Sin PromoMats no hay fechas con las que comparar los Approval IDs (antes se escaneaba igual y todo salía «Sin fecha»). Si PromoMats no responde al empezar, el escaneo se detiene en el acto.
+**Las 2 sesiones (AzMed y PromoMats) son obligatorias**: el servidor no inicia el escaneo si falta alguna o está expirada. Kaltura no necesita sesión (sus metadatos se leen de forma anónima). Sin PromoMats no hay fechas con las que comparar los Approval IDs (antes se escaneaba igual y todo salía «Sin fecha»). Si PromoMats no responde al empezar, el escaneo se detiene en el acto.
 
 ### Escaneo por áreas
 
@@ -62,8 +62,8 @@ Las páginas de un área publicadas fuera de su ruta no se rastrean: añádelas 
 ```
 Sesiones ─> Descubrimiento ─> Rastreo y extracción ─> Fechas en PromoMats
 (Identity,    (páginas, sitemaps,   (texto, imágenes+OCR,     (en paralelo, con caché;
- PromoMats,    crt.sh vía Chromium)  PDF, videos Kaltura,      vigente / por vencer /
- Kaltura)                            capturas de evidencia)    vencido / retirado)
+ PromoMats)    crt.sh vía Chromium)  PDF, videos Kaltura,      vigente / por vencer /
+                                     capturas de evidencia)    vencido / retirado)
 ```
 
 - **Detección de IDs** (`server/config.js`): prefijos `MX|CC|CO|EC|PE|BR|AR|CL|UY|XC` + 4–6 dígitos. Acepta IDs dentro de nombres de archivo (`banner_CC-14803.jpg`) y descarta años (`CO-2024`).
@@ -152,8 +152,11 @@ az-content-scanner/
 ## 7. Notas de operación
 
 - **Países**: CR, MX, BR, AR, CL, UY. Ecuador, Perú y Colombia están retirados: `azmed.ec` y `azmed.pe` no existen y `azmed.co` **no es de AstraZeneca**. Añadirlos en `server/config.js` y `ALLOWED_DOMAINS` cuando se conozcan las URLs reales.
-- **Proxy corporativo (zScaler)**: Kaltura y crt.sh se consultan a través de Chromium/Playwright, que usa la red del navegador. Alternativa global: `NODE_EXTRA_CA_CERTS=/ruta/certificado-raiz.pem`.
+- **Proxy corporativo (zScaler)**: Kaltura (lectura anónima de metadatos, con `KALTURA_TIMEOUT_SECONDS`/`KALTURA_RETRIES`) y crt.sh se consultan a través de Chromium/Playwright, que usa la red del navegador. Alternativa global: `NODE_EXTRA_CA_CERTS=/ruta/certificado-raiz.pem`.
 - **WAF (CloudFront)**: bloquea el user-agent `HeadlessChrome`; el escáner usa el de un Chrome normal. Si aparecen páginas "Bloqueadas por WAF", baja `CRAWL_CONCURRENCY`.
+- **Sesiones que duran**: se guardan cookies, `localStorage` y `sessionStorage`; se renuevan tras cada uso y cada `SESSION_KEEPALIVE_MINUTES` (20 por defecto) se "toca" cada servicio para evitar el cierre por inactividad. La sonda de AzMed es la página «Mi cuenta» del sitio.
+- **PromoMats fiable**: los IDs que fallan por causas transitorias se reintentan en una segunda pasada y los resultados con fecha se recuerdan `VAULT_CACHE_HOURS` horas. El informe agrupa los motivos de los IDs sin fecha y queda PARCIAL si falta alguno. Un video de Kaltura que no se pudo leer aparece como «No verificado», no como «Sin ID».
+- **Cobertura por áreas**: el informe lista las páginas enlazadas fuera de las áreas elegidas (con botón *Copiar*) para añadirlas en «URLs adicionales».
 - **Descubrimiento**: primero los enlaces de las páginas (menús, cuerpo, pie, `data-href`, `onclick`, iframes del mismo sitio, Shadow DOM) y después `robots.txt` / sitemaps. Las URLs de sitemap que dan 404 se reportan aparte.
 - **Contenido oculto**: se leen también acordeones, pestañas y modales cerrados.
 - **Sesión de AzMed**: se valida contra una página protegida (`AZMED_PROBE_URL` o la aprendida en `data/meta.json`), no contra la home pública.

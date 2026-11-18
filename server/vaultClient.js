@@ -1,5 +1,8 @@
+const fs = require('fs');
+const path = require('path');
 const authManager = require('./authManager');
 const config = require('./config');
+const { atomicWriteSync } = require('./fsutil');
 
 const { parseDate, toIso, todayUtc, daysRemaining, classify, lifecycleState, isRetired } = require('./vaultParse');
 
@@ -28,6 +31,8 @@ const EXPIRATION_LABEL_SRC = '(^|\\n)\\s*(Expiration Date|Fecha de (Vencimiento|
 class VaultClient {
     constructor() {
         this.cache = new Map();
+        this.diskCache = new Map();   // id → { at, r } (resultados con fecha, persistentes entre escaneos)
+        this.diskDirty = false;
         this.browser = null;
         this.context = null;
         this.pages = [];
@@ -37,11 +42,58 @@ class VaultClient {
 
     get cfg() { return config.services.promomats; }
 
+    get cacheFile() { return path.join(config.dataDir, 'vault-cache.json'); }
+
+    loadDiskCache() {
+        this.diskCache = new Map();
+        this.diskDirty = false;
+        if (!config.vaultCacheHours) return;
+        try {
+            const raw = JSON.parse(fs.readFileSync(this.cacheFile, 'utf8'));
+            const ttl = config.vaultCacheHours * 3600 * 1000;
+            for (const [id, e] of Object.entries(raw)) if (e && e.at && Date.now() - e.at < ttl && e.r) this.diskCache.set(id, e);
+        } catch (e) { /* sin caché previa */ }
+    }
+
+    saveDiskCache() {
+        if (!config.vaultCacheHours || !this.diskDirty) return;
+        try {
+            if (!fs.existsSync(config.dataDir)) fs.mkdirSync(config.dataDir, { recursive: true });
+            const obj = {};
+            this.diskCache.forEach((e, id) => { obj[id] = e; });
+            atomicWriteSync(this.cacheFile, JSON.stringify(obj), 'utf8');
+            this.diskDirty = false;
+        } catch (e) { /* la caché nunca debe romper el escaneo */ }
+    }
+
+    // Resultado con fecha guardado: se reclasifica con la fecha de HOY (un "vigente" de ayer puede estar "por vencer")
+    fromDiskCache(id) {
+        const e = this.diskCache.get(id);
+        if (!e) return null;
+        const r = { ...e.r };
+        if (r.status !== 'RETIRADO' && r.expirationDate) {
+            r.status = this.classify(r.expirationDate);
+            r.daysRemaining = this.daysRemaining(r.expirationDate);
+        }
+        const hours = Math.max(1, Math.round((Date.now() - e.at) / 3600000));
+        r.note = `Resultado de PromoMats guardado hace ${hours} h (caché de ${config.vaultCacheHours} h)`;
+        return r;
+    }
+
+    rememberResult(id, r) {
+        if (!config.vaultCacheHours || !r || !r.expirationDate) return;
+        if (!['VENCIDO', 'PROXIMO A VENCER', 'VIGENTE', 'RETIRADO'].includes(r.status)) return;
+        this.diskCache.set(id, { at: Date.now(), r: { status: r.status, approvedDate: r.approvedDate, expirationDate: r.expirationDate, daysRemaining: r.daysRemaining, note: '' } });
+        this.diskDirty = true;
+    }
+
     async init() {
         this.cache.clear();
         this.lastError = null;
         this.available = false;
+        this.sessionDead = false;
         this.pages = [];
+        this.loadDiskCache();
 
         if (!authManager.hasSession('promomats')) {
             this.lastError = 'Sin sesión de PromoMats';
@@ -57,11 +109,13 @@ class VaultClient {
             this.context = context;
 
             const first = await context.newPage();
-            await first.goto(`https://${this.cfg.host}/ui/`, { waitUntil: 'domcontentloaded', timeout: 40000 });
-            await first.waitForTimeout(6000);
-
-            if (!first.url().includes(this.cfg.host)) {
-                this.lastError = 'La sesión de PromoMats expiró (redirigió al login)';
+            await first.goto(`https://${this.cfg.host}/ui/`, { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {});
+            // Espera a que el acceso se resuelva (SSO silencioso incluido) en vez de decidir a los 6 s
+            const verdict = await authManager.settleAccess(first, 'promomats', config.sessionSettleMs);
+            if (verdict !== 'active') {
+                this.lastError = verdict === 'expired'
+                    ? 'La sesión de PromoMats expiró (pide iniciar sesión)'
+                    : 'PromoMats no respondió a tiempo (red lenta o portal ocupado). Reintenta en unos minutos.';
                 await this.close();
                 return { success: false, error: this.lastError };
             }
@@ -203,8 +257,15 @@ class VaultClient {
     // Escribe el codigo en el buscador global y devuelve el input usado
     async runSearch(page, safe, trace) {
         // Pagina neutra para que los resultados de la busqueda anterior no se confundan con los nuevos
-        await page.goto(`https://${this.cfg.host}/ui/#library`, { waitUntil: 'domcontentloaded', timeout: 40000 });
-        await page.waitForSelector(SEARCH_INPUT_SELECTORS.join(','), { state: 'visible', timeout: 3500 }).catch(() => {});
+        await page.goto(`https://${this.cfg.host}/ui/#library`, { waitUntil: 'domcontentloaded', timeout: 45000 });
+        await page.waitForSelector(SEARCH_INPUT_SELECTORS.join(','), { state: 'visible', timeout: config.vaultStepTimeoutMs }).catch(() => {});
+
+        // Si el portal redirigió al login, la sesión caducó: no tiene sentido seguir buscando
+        const here = page.url().toLowerCase();
+        if (!here.includes(this.cfg.host.toLowerCase()) || /\/auth\/login|login\./.test(here)) {
+            trace.sessionExpired = true;
+            return false;
+        }
 
         let input = null;
         for (const sel of SEARCH_INPUT_SELECTORS) {
@@ -219,20 +280,41 @@ class VaultClient {
         await page.keyboard.press('Enter');
         trace.submitted = true;
 
-        // Esperar a que la lista muestre EXACTAMENTE este codigo en el encabezado "Search for:"
+        // Esperar los resultados de ESTE codigo. Se acepta (a) el encabezado "Search for:"/"Buscar:" con el codigo o
+        // (b) una fila de resultados con enlace a un documento que contiene exactamente el codigo (no depende del idioma
+        // ni del texto del encabezado). "Sin resultados" solo se declara si el portal lo dice; si no responde a tiempo
+        // se marca timedOut (antes ese caso se confundia con "ID no encontrado").
+        const upper = safe.toUpperCase();
         const start = Date.now();
-        while (Date.now() - start < 15000) {
+        let text = '';
+        while (Date.now() - start < config.vaultSearchTimeoutMs) {
             await page.waitForTimeout(800);
-            const text = await this.pageText(page);
-            if (new RegExp(`Search for:\\s*"?${safe}"?`, 'i').test(text) && text.toUpperCase().includes(safe.toUpperCase())) {
+            text = await this.pageText(page);
+            const up = text.toUpperCase();
+            if (new RegExp(`(Search for|Buscar|Resultados[^\\n]{0,20}):?\\s*"?${safe}"?`, 'i').test(text) && up.includes(upper)) {
                 trace.resultsListed = true;
                 return true;
             }
-            if (/no results|no se encontraron|0 of 0/i.test(text) && text.toUpperCase().includes(safe.toUpperCase())) {
-                trace.resultsListed = false;
+            const rowListed = await page.evaluate((id) => {
+                const re = new RegExp(`(^|[^A-Z0-9])${id.replace(/[-]/g, '\\-')}(?![0-9])`);
+                return Array.from(document.querySelectorAll('a[href*="doc_info"]')).some((a) => {
+                    let node = a;
+                    for (let i = 0; i < 12 && node && node !== document.body; i++, node = node.parentElement) {
+                        if (re.test((node.innerText || '').toUpperCase())) return true;
+                    }
+                    return false;
+                });
+            }, safe).catch(() => false);
+            if (rowListed) { trace.resultsListed = true; return true; }
+            if (/no results|no se encontraron|0 of 0|sin resultados|no hay resultados|no matches/i.test(text) && up.includes(upper)) {
+                trace.noResults = true;
                 return true;
             }
+            const url = page.url().toLowerCase();
+            if (!url.includes(this.cfg.host.toLowerCase()) || /\/auth\/login|login\./.test(url)) { trace.sessionExpired = true; return false; }
         }
+        trace.timedOut = true;
+        trace.viewSample = text.replace(/\s+/g, ' ').trim().slice(0, 140);
         return true;
     }
 
@@ -250,8 +332,11 @@ class VaultClient {
             trace.resultsListed = false;
             trace.linkFound = null;
             trace.resultClicked = false;
+            trace.noResults = false;
+            trace.timedOut = false;
 
             const ok = await this.runSearch(page, safe, trace);
+            if (trace.sessionExpired) return { found: false, trace };
             if (!trace.searchBox) return { found: false, trace };
             if (!ok || !trace.resultsListed) {
                 if (attempt === 2) return { found: false, trace };
@@ -392,17 +477,25 @@ class VaultClient {
         try {
             const res = await this.openDocument(page, approvalId);
             if (!res.found) {
+                const t = res.trace;
+                // La sesión caducó a mitad del escaneo: se corta aquí; el resto de consultas no se intenta (antes se
+                // seguía media hora marcando todo como "no encontrado" / "sin fecha")
+                if (t.sessionExpired) {
+                    this.sessionDead = true;
+                    return unknownResult('La sesión de PromoMats caducó durante el escaneo. Renueva la sesión en «Cuentas» y repite el escaneo.');
+                }
                 let why;
-                if (!res.trace.searchBox) why = 'No se encontró el cuadro de búsqueda de PromoMats';
-                else if (!res.trace.resultsListed) why = 'El código no apareció en los resultados de PromoMats';
-                else if (res.notFoundPage) why = 'PromoMats mostró "Document Not Found"';
-                else if (res.trace.docNumberMismatch) why = `La ficha abierta es ${res.trace.docNumberMismatch}, no ${approvalId} (tras ${res.trace.attempts} intentos)`;
+                let status = 'SIN FECHA FIABLE';
+                // transient: causa que puede no repetirse (red lenta, portal ocupado): se reintenta en una segunda pasada
+                const transient = !t.noResults && !res.notFoundPage;
+                if (!t.searchBox) why = 'No se encontró el cuadro de búsqueda de PromoMats (el portal tardó en cargar o cambió su diseño)';
+                else if (t.noResults) { status = 'ID NO ENCONTRADO'; why = 'PromoMats no devolvió resultados para este código'; }
+                else if (t.timedOut) why = `PromoMats no respondió a la búsqueda en ${Math.round(config.vaultSearchTimeoutMs / 1000)} s (red lenta o portal ocupado)${t.viewSample ? `. Pantalla: «${t.viewSample}»` : ''}`;
+                else if (res.notFoundPage) why = 'PromoMats mostró "Document Not Found" (sin permiso o documento inexistente)';
+                else if (t.docNumberMismatch) why = `La ficha abierta es ${t.docNumberMismatch}, no ${approvalId} (tras ${t.attempts} intentos)`;
                 else why = 'No se pudo abrir la ficha del documento';
 
-                return {
-                    status: res.trace.searchBox && !res.trace.resultsListed ? 'ID NO ENCONTRADO' : 'SIN FECHA FIABLE',
-                    approvedDate: null, expirationDate: null, daysRemaining: null, note: why
-                };
+                return { status, approvedDate: null, expirationDate: null, daysRemaining: null, note: why, transient };
             }
 
             const { approved, expiration, text } = await this.readDates(page);
@@ -419,7 +512,8 @@ class VaultClient {
                     daysRemaining: null,
                     note: res.trace.keyDatesOpen
                         ? 'La ficha no muestra fecha de vencimiento legible'
-                        : 'No se pudo desplegar la sección Key Dates'
+                        : 'No se pudo desplegar la sección Key Dates',
+                    transient: !res.trace.keyDatesOpen
                 };
             }
             return {
@@ -430,8 +524,33 @@ class VaultClient {
                 note: ''
             };
         } catch (e) {
-            return unknownResult(`Error consultando PromoMats: ${e.message.split('\n')[0]}`);
+            return { ...unknownResult(`Error consultando PromoMats: ${e.message.split('\n')[0]}`), transient: true };
         }
+    }
+
+    // Segunda pasada: los IDs que fallaron por causas transitorias (red lenta, portal ocupado) se reintentan una vez,
+    // repartidos entre las pestañas. Si los primeros reintentos fallan también, se abandona (PromoMats no responde).
+    async retryTransient(results, shouldStop) {
+        if (!this.available || this.sessionDead || !this.pages.length) return;
+        const ids = [...results].filter(([, r]) => r && r.transient && r.status === 'SIN FECHA FIABLE').map(([id]) => id).slice(0, 80);
+        if (!ids.length) return;
+        let tried = 0, recovered = 0;
+        const next = () => ids.shift();
+        const run = async (page) => {
+            for (let id = next(); id; id = next()) {
+                if ((shouldStop && shouldStop()) || this.sessionDead) return;
+                if (tried >= 6 && recovered === 0) return;   // los primeros reintentos fallan: PromoMats no responde, no insistir
+                tried++;
+                const r = await this.lookupOne(page, id);
+                if (!r.transient) {
+                    if (r.status !== 'SIN FECHA FIABLE' || r.expirationDate) recovered++;
+                    results.set(id, r);
+                    this.cache.set(id, r);
+                    this.rememberResult(id, r);
+                }
+            }
+        };
+        await Promise.all(this.pages.map(run));
     }
 
     // Cola de consultas en segundo plano: push(id) las encola, finish() espera a que terminen
@@ -459,9 +578,12 @@ class VaultClient {
                 const id = queue.shift();
                 let r;
                 if (self.cache.has(id)) r = self.cache.get(id);
+                else if (self.fromDiskCache(id)) { r = self.fromDiskCache(id); self.cache.set(id, r); }
+                else if (self.sessionDead) r = unknown('La sesión de PromoMats caducó durante el escaneo. Renueva la sesión en «Cuentas» y repite el escaneo.');
                 else {
                     r = await self.lookupOne(page, id);
                     self.cache.set(id, r);
+                    self.rememberResult(id, r);
                 }
                 results.set(id, r);
                 done++;
@@ -488,6 +610,8 @@ class VaultClient {
                 closing = true;
                 wakeAll();
                 await Promise.all(workers);
+                await self.retryTransient(results, shouldStop);
+                self.saveDiskCache();
                 seen.forEach(id => {
                     if (!results.has(id)) results.set(id, unknown('No se consultó en PromoMats (escaneo cancelado)'));
                 });
@@ -497,6 +621,8 @@ class VaultClient {
     }
 
     async close() {
+        // Al terminar con la sesión viva se guardan las cookies renovadas (alarga la sesión para el siguiente uso)
+        if (this.available && !this.sessionDead && this.context) await authManager.persistState('promomats', this.context);
         if (this.browser) await this.browser.close().catch(() => {});
         this.browser = null; this.context = null; this.pages = []; this.available = false;
     }

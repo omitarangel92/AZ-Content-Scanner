@@ -14,6 +14,10 @@ function browserUserAgent(browser) {
     return `Mozilla/5.0 (${os}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${browser.version()} Safari/537.36`;
 }
 
+// Cuentas que usa el escaneo. Kaltura se retiró: los metadatos de los videos se leen con una sesión de widget anónima
+// (kalturaClient) y su login no influía en el resultado.
+const SERVICES = ['azmed', 'promomats'];
+
 class AuthManager {
     constructor() {
         this.pending = {};
@@ -33,15 +37,14 @@ class AuthManager {
     sessionStatus() {
         return {
             azmed: this.hasSession('azmed'),
-            promomats: this.hasSession('promomats'),
-            kaltura: this.hasSession('kaltura')
+            promomats: this.hasSession('promomats')
         };
     }
 
     // Estado combinado: login en curso > archivo + ultima validacion real
     getSessionStates() {
         const out = {};
-        for (const svc of ['azmed', 'promomats', 'kaltura']) {
+        for (const svc of SERVICES) {
             const exists = this.hasSession(svc);
             const v = this.validation[svc];
             if (this.pending[svc]) out[svc] = { state: 'waiting', detail: 'Esperando a que termines de iniciar sesión en la ventana del navegador…', checkedAt: null };
@@ -55,7 +58,6 @@ class AuthManager {
     // Host donde termina un login correcto de cada servicio
     serviceHost(service, url) {
         if (service === 'promomats') return (config.services.promomats.host || '').toLowerCase();
-        if (service === 'kaltura') return 'kmc.kaltura.com';
         try { return new URL(url).hostname.toLowerCase(); } catch (e) { return ''; }
     }
 
@@ -152,7 +154,7 @@ class AuthManager {
             try { h = new URL(u).hostname; } catch (e) {}
             const base = pending.host.replace(/^www\./, '');
             const onService = !!base && (h === base || h.endsWith('.' + base));
-            if (!onService || (service === 'kaltura' && !/\/kmcng\//.test(u))) { pending.stable = 0; return; }
+            if (!onService) { pending.stable = 0; return; }
 
             pending.stable++;
             const done = (pending.sawLogin && pending.stable >= 2) ||          // volvio del login al servicio
@@ -165,21 +167,102 @@ class AuthManager {
 
     // Cookies + localStorage de las paginas abiertas. No usa context.storageState(): este abre
     // pestañas ocultas para leer cada origen y, en la ventana visible, hacia parpadear la pantalla.
+    // También guarda sessionStorage (Playwright no lo incluye): Algunos portales guardan allí el token de
+    // sesión, y sin él cada navegador nuevo pide iniciar sesión otra vez ("no se guarda el login").
     async lightState(context) {
         const cookies = await context.cookies();
         const byOrigin = new Map();
+        const bySession = new Map();
         for (const page of context.pages()) {
             for (const frame of page.frames()) {
                 try {
                     const data = await frame.evaluate(() => ({
                         origin: location.origin,
-                        items: Object.keys(localStorage).map(k => ({ name: k, value: localStorage.getItem(k) }))
+                        items: Object.keys(localStorage).map(k => ({ name: k, value: localStorage.getItem(k) })),
+                        session: Object.keys(sessionStorage).map(k => ({ name: k, value: sessionStorage.getItem(k) }))
                     }));
-                    if (data.origin && data.origin !== 'null' && data.items.length) byOrigin.set(data.origin, data.items);
+                    if (!data.origin || data.origin === 'null') continue;
+                    if (data.items.length) byOrigin.set(data.origin, data.items);
+                    if (data.session.length) bySession.set(data.origin, data.session);
                 } catch (e) {}
             }
         }
-        return { cookies, origins: [...byOrigin].map(([origin, localStorage]) => ({ origin, localStorage })) };
+        return {
+            cookies,
+            origins: [...byOrigin].map(([origin, localStorage]) => ({ origin, localStorage })),
+            sessionStorage: [...bySession].map(([origin, items]) => ({ origin, items }))
+        };
+    }
+
+    // Vuelve a guardar la sesión con las cookies renovadas por el propio servicio (las sesiones deslizantes se alargan
+    // con cada uso). Solo se llama tras comprobar que el acceso funciona, para no sobrescribir con un estado cerrado.
+    // Conserva el almacenamiento de orígenes que no estén abiertos ahora.
+    async persistState(service, context) {
+        try {
+            const state = await this.lightState(context);
+            if (!state.cookies.length && !state.origins.length && !state.sessionStorage.length) return false;
+            let old = {};
+            try { old = JSON.parse(fs.readFileSync(this.sessionPath(service), 'utf8')); } catch (e) {}
+            const keep = (oldList, newList, key) => {
+                const have = new Set(newList.map(x => x.origin));
+                return [...newList, ...(oldList || []).filter(x => !have.has(x.origin))];
+            };
+            state.origins = keep(old.origins, state.origins);
+            state.sessionStorage = keep(old.sessionStorage, state.sessionStorage);
+            this.writeSession(service, state);
+            return true;
+        } catch (e) { return false; }
+    }
+
+    // Restaura el sessionStorage guardado en cada página nueva del contexto (storageState de Playwright no lo hace)
+    async restoreSessionStorage(context, service) {
+        let entries = [];
+        try { entries = JSON.parse(fs.readFileSync(this.sessionPath(service), 'utf8')).sessionStorage || []; } catch (e) {}
+        if (!entries.length) return;
+        await context.addInitScript((list) => {
+            try {
+                const e = list.find(x => x.origin === location.origin);
+                if (e) for (const it of e.items) if (sessionStorage.getItem(it.name) === null) sessionStorage.setItem(it.name, it.value);
+            } catch (err) { /* página sin acceso a sessionStorage */ }
+        }, entries);
+    }
+
+    // Espera a que el servicio termine de resolver el acceso (redirecciones de login, SSO silencioso con las cookies de
+    // Microsoft guardadas…) en lugar de decidir a los 5 s: el login corporativo tarda 10–60 s en esta red.
+    // Devuelve 'active' | 'expired' (pide credenciales) | 'unknown' (no respondió a tiempo: no es lo mismo que expirada).
+    async settleAccess(page, service, maxMs) {
+        const vaultHost = (config.services.promomats.host || '').toLowerCase();
+        const start = Date.now();
+        let clickedSso = false, okSince = 0;
+        const visible = async (sel) => {
+            const el = await page.$(sel).catch(() => null);
+            return el ? await el.isVisible().catch(() => false) : false;
+        };
+        while (Date.now() - start < maxMs) {
+            await page.waitForTimeout(1000);
+            const url = page.url().toLowerCase();
+            let host = '';
+            try { host = new URL(url).hostname; } catch (e) {}
+            const pwd = await visible('input[type="password"]');
+            const loginUrl = isLoginUrl(url);
+
+            let signedIn = false;
+            if (service === 'promomats') signedIn = !!vaultHost && host === vaultHost && !loginUrl && !pwd;
+            else signedIn =!loginUrl && !pwd && host !== '' && !/identity\.|login\./.test(host);
+
+            if (signedIn) { okSince = okSince || Date.now(); if (Date.now() - okSince >= 2500) return 'active'; continue; }
+            okSince = 0;
+
+            // Pantalla de Veeva con el botón de SSO de AstraZeneca: se pulsa una vez; con las cookies de Microsoft
+            // guardadas el acceso es silencioso y no pide credenciales.
+            if (service === 'promomats' && !clickedSso && host === 'login.veevavault.com') {
+                const btn = page.locator('text=/log in with/i').first();
+                if (await btn.count().catch(() => 0)) { clickedSso = true; await btn.click({ timeout: 3000 }).catch(() => {}); continue; }
+            }
+            // Un formulario de contraseña o de correo visible = pide credenciales: no hay forma silenciosa, expiró
+            if (pwd || (await visible('input[name="loginfmt"], input[type="email"]')) ) return 'expired';
+        }
+        return 'unknown';
     }
 
     async completeLogin(service, pending) {
@@ -224,11 +307,10 @@ class AuthManager {
         const onService = !!base && (curHost === base || curHost.endsWith('.' + base));
         const pwd = last ? await last.$('input[type="password"]').catch(() => null) : null;
         const pwdVisible = pwd ? await pwd.isVisible().catch(() => false) : false;
-        const inKmc = service !== 'kaltura' || /\/kmcng\//.test(curUrl.toLowerCase());
-        if (!onService || isLoginUrl(curUrl.toLowerCase()) || pwdVisible || !inKmc) {
+        if (!onService || isLoginUrl(curUrl.toLowerCase()) || pwdVisible) {
             return {
                 success: false,
-                error: `Todavía no terminó el inicio de sesión: la ventana sigue en ${curHost || 'una página en blanco'}. Completa el login (incluida la verificación de Microsoft: «Ahora no» o «Siguiente») hasta ver el portal de ${service === 'promomats' ? 'PromoMats' : service === 'kaltura' ? 'Kaltura' : 'AzMed'} y vuelve a pulsar «Terminé».`
+                error: `Todavía no terminó el inicio de sesión: la ventana sigue en ${curHost || 'una página en blanco'}. Completa el login (incluida la verificación de Microsoft: «Ahora no» o «Siguiente») hasta ver el portal de ${service === 'promomats' ? 'PromoMats' : 'AzMed'} y vuelve a pulsar «Terminé».`
             };
         }
         clearInterval(p.timer); clearInterval(p.blankTimer);
@@ -272,7 +354,8 @@ class AuthManager {
     // Devuelve { state: 'active' | 'expired' | 'none' | 'error', detail, checkedAt }
     async validateSession(service, probeUrl) {
         const r = await this.validateSessionOnce(service, probeUrl);
-        if (r.state !== 'error') return r;
+        // Solo se reintenta un fallo técnico (excepción); si el portal simplemente tardó, repetir duplicaría la espera
+        if (r.state !== 'error' || !r.transient) return r;
         return this.validateSessionOnce(service, probeUrl);   // fallo transitorio (red lenta, portal ocupado): un reintento
     }
 
@@ -296,42 +379,28 @@ class AuthManager {
                 userAgent: browserUserAgent(browser),
                 storageState: this.sessionPath(service)
             });
+            await this.restoreSessionStorage(context, service);
             const page = await context.newPage();
-            await page.goto(probeUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
-            // Espera a que terminen las redirecciones de login (máx. 5 s) en lugar de dormir siempre 5 s
-            await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
+            await page.goto(probeUrl, { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {});
+            // Se espera a que el portal resuelva el acceso (incluido el SSO silencioso); solo se declara expirada
+            // si pide credenciales. Si no responde a tiempo es "no se pudo validar", no "expirada".
+            const verdict = await this.settleAccess(page, service, config.sessionSettleMs);
 
-            const finalUrl = page.url().toLowerCase();
-            let expired = false;
-            let detail = 'Sesión activa';
-
-            if (service === 'promomats') {
-                const host = (config.services.promomats.host || '').toLowerCase();
-                // Si termina fuera del host de Vault o en una pantalla de login, la sesion caduco
-                if (!host || !finalUrl.includes(host) || isLoginUrl(finalUrl)) expired = true;
-                else {
-                    const hasPwd = await page.$('input[type="password"]').catch(() => null);
-                    if (hasPwd) expired = true;
-                }
-            } else if (service === 'azmed') {
-                if (isLoginUrl(finalUrl)) expired = true;
-                else {
-                    const hasPwd = await page.$('input[type="password"]').catch(() => null);
-                    if (hasPwd) expired = true;
-                }
-            } else if (service === 'kaltura') {
-                // Se abre la lista de contenidos de KMC: si la sesion caduco, KMC redirige a /login
-                const pwd = await page.$('input[type="password"]').catch(() => null);
-                const pwdVisible = pwd ? await pwd.isVisible().catch(() => false) : false;
-                if (isLoginUrl(finalUrl) || pwdVisible) expired = true;
+            if (verdict === 'unknown') {
+                const r = { state: 'error', detail: 'El portal tardó demasiado en responder (red lenta). Reintenta en un momento.', checkedAt: now() };
+                this.validation[service] = r;
+                return r;
             }
-
-            if (expired) detail = 'La sesión expiró: vuelve a iniciar sesión';
-            const r = { state: expired ? 'expired' : 'active', detail, checkedAt: now() };
+            if (verdict === 'active') await this.persistState(service, context);   // guarda las cookies renovadas
+            const r = {
+                state: verdict === 'active' ? 'active' : 'expired',
+                detail: verdict === 'active' ? 'Sesión activa' : 'La sesión expiró: vuelve a iniciar sesión',
+                checkedAt: now()
+            };
             this.validation[service] = r;
             return r;
         } catch (e) {
-            const r = { state: 'error', detail: `No se pudo validar: ${e.message.split('\n')[0]}`, checkedAt: now() };
+            const r = { state: 'error', detail: `No se pudo validar: ${e.message.split('\n')[0]}`, checkedAt: now(), transient: true };
             this.validation[service] = r;
             return r;
         } finally {
@@ -341,38 +410,56 @@ class AuthManager {
 
     // URL protegida para comprobar AzMed: AZMED_PROBE_URL, o una pagina que pidio login en un escaneo
     // anterior del mismo dominio. La home publica no sirve: carga aunque la sesion haya caducado.
+    // Solo una página "Mi cuenta" sirve de sonda: exige estar logueado pero no permisos especiales. Antes se aprendía
+    // la primera página que pedía login (p. ej. un micrositio con permisos propios) y la sesión válida se declaraba
+    // "expirada" en cuanto se comprobaba contra ella. Una sonda aprendida que no sea de cuenta se ignora.
+    isAccountUrl(u) { return /my-account|mi-cuenta|minha-conta/i.test(u || ''); }
+
     azmedProbeFor(targetUrl) {
         if (config.azmedProbeUrl) return config.azmedProbeUrl;
         try {
             const host = new URL(targetUrl).hostname.replace(/^www\./, '');
             const learned = (storage.loadMeta().azmedProbe || {})[host];
-            if (learned) return learned;
+            if (learned && this.isAccountUrl(learned)) return learned;
         } catch (e) {}
         return targetUrl || null;
     }
 
     rememberProtectedUrl(baseDomain, url) {
-        if (!baseDomain || !url || /\.pdf(\?|$)/i.test(url)) return;
+        if (!baseDomain || !url || !this.isAccountUrl(url)) return;
         const meta = storage.loadMeta();
         meta.azmedProbe = meta.azmedProbe || {};
-        const current = meta.azmedProbe[baseDomain];
-        if (current === url) return;
-        // Se prefiere "Mi cuenta" (exige solo estar logueado) a paginas de eventos con permisos propios
-        const isAccount = (u) => /my-account|mi-cuenta|minha-conta|account/i.test(u || '');
-        if (current && (isAccount(current) || !isAccount(url))) return;
+        if (meta.azmedProbe[baseDomain] === url) return;
         meta.azmedProbe[baseDomain] = url;
         try { storage.saveMeta(meta); } catch (e) {}
     }
 
+    probesFor(targetUrl) {
+        return {
+            promomats: config.services.promomats.host ? `https://${config.services.promomats.host}/ui/` : null,
+            azmed: this.azmedProbeFor(targetUrl)
+        };
+    }
+
+    // Mantiene vivas las sesiones: abrir el servicio con la sesión guardada cuenta como actividad (evita el cierre por
+    // inactividad) y guarda las cookies renovadas. Una a una, para no cargar el equipo. Se salta las ya expiradas.
+    async keepAlive(targetUrl) {
+        if (this.keepAliveRunning || Object.keys(this.pending).length) return;
+        this.keepAliveRunning = true;
+        try {
+            const probes = this.probesFor(targetUrl);
+            for (const svc of ['promomats', 'azmed']) {
+                const v = this.validation[svc];
+                if (!this.hasSession(svc) || !probes[svc] || (v && v.state === 'expired')) continue;
+                await this.validateSession(svc, probes[svc]);
+            }
+        } finally { this.keepAliveRunning = false; }
+    }
+
     // Valida los servicios indicados en paralelo
     async validateAll(services, targetUrl, maxAgeMs = 0) {
-        const probes = {
-            promomats: config.services.promomats.host ? `https://${config.services.promomats.host}/ui/` : null,
-            azmed: this.azmedProbeFor(targetUrl),
-            // No la pagina de login: esa contiene "login" en la URL aunque la sesion este activa
-            kaltura: 'https://kmc.kaltura.com/index.php/kmcng/content/entries/list'
-        };
-        const list = services && services.length ? services : ['azmed', 'promomats', 'kaltura'];
+        const probes = this.probesFor(targetUrl);
+        const list = (services && services.length ? services : SERVICES).filter(s => SERVICES.includes(s));
         await Promise.all(list.map(svc => {
             // Comprobada hace poco como activa (p. ej. recién iniciada): no se vuelve a abrir el portal
             const v = this.validation[svc];
@@ -402,6 +489,7 @@ class AuthManager {
             acceptDownloads: false,
             storageState: this.hasSession(service) ? this.sessionPath(service) : undefined
         });
+        await this.restoreSessionStorage(context, service);
         return { browser, context };
     }
 }

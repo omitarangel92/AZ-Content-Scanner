@@ -42,3 +42,24 @@ test('mergeSummaries: un área fallida deja el informe PARCIAL con el motivo', (
     assert.deepEqual(m.coverage.areas.map(a => a.status), ['completo', 'error']);
     assert.equal(m.coverage.areas[1].attempts, 2);
 });
+
+test('mergeSummaries: «fuera de las áreas» une las listas y quita lo que otra área elegida sí cubre', () => {
+    const sections = [{ label: 'Oncología', url: 'https://x.cr/es/home/oncologia.html' }, { label: 'CVRM', url: 'https://x.cr/es/home/cvrm.html' }];
+    const m = mergeSummaries([
+        { label: 'Oncología', summary: summary([asset('CC-10001', 'VIGENTE', ['http://a'])], { outOfScope: ['https://x.cr/es/home/cvrm/cardio.html', 'https://x.cr/es/home/Synagis.html'] }) },
+        { label: 'CVRM', summary: summary([asset('CC-10002', 'VIGENTE', ['http://b'])], { outOfScope: ['https://x.cr/es/home/Synagis.html', 'https://x.cr/es/home/mismo-cancer.html'] }) }
+    ], { scanId: 'x4', sections });
+    assert.deepEqual(m.coverage.outOfScope.sort(), ['https://x.cr/es/home/Synagis.html', 'https://x.cr/es/home/mismo-cancer.html']);
+});
+
+test('mergeSummaries: los videos «NO VERIFICADO» se deduplican y cuentan como por revisar, no como «SIN ID»', () => {
+    const unv = (url) => asset('SIN VERIFICAR', 'NO VERIFICADO', ['http://p'], { assetUrl: url });
+    const m = mergeSummaries([
+        { label: 'A', summary: summary([unv('kaltura:1_aaa')], { videosUnverified: 1, kalturaFailures: 1 }) },
+        { label: 'B', summary: summary([unv('kaltura:1_aaa'), unv('kaltura:1_bbb')], { videosUnverified: 2, kalturaFailures: 2 }) }
+    ], { scanId: 'x5' });
+    assert.equal(m.assets.length, 2);
+    assert.equal(m.sinFechaFiable, 2);
+    assert.equal(m.coverage.videosUnverified, 3);
+    assert.equal(m.coverage.kalturaFailures, 3);
+});

@@ -640,12 +640,14 @@ class ScannerEngine {
             wafBlocked: 0, duplicatesSkipped: 0, sitemapUrls: 0, astrazenecaSeen: false,
             sitemapStale: 0, sitemapStaleList: [],
             imagesOcr: 0, imagesByNameOnly: 0, pdfsFull: 0, pdfsByNameOnly: 0,
-            videosChecked: 0, videosWithoutId: 0, hiddenTextIds: 0,
+            videosChecked: 0, videosWithoutId: 0, videosUnverified: 0, hiddenTextIds: 0,
             ocrAvailable: true, ocrNote: '',
+            outOfScope: [],   // enlaces a páginas fuera de las áreas elegidas (no se analizaron)
             partial: false, partialReasons: []
         };
         const findings = new Map();
         const noIdFindings = [];
+        const unverifiedVideos = [];   // videos de Kaltura cuyos metadatos no se pudieron leer (no son «sin ID»)
         let browser = null, context = null;
         const pages = [];
         let vaultStream = null;
@@ -723,6 +725,21 @@ class ScannerEngine {
                 });
             });
 
+            // Videos de Kaltura sin poder leer sus metadatos: NO se afirma que carezcan de ID (era un falso positivo de
+            // cumplimiento causado por la red); quedan "por revisar".
+            const seenUnv = new Set();
+            unverifiedVideos.forEach(uv => {
+                if (seenUnv.has(uv.assetUrl) || seenUnv.size >= 200) return;
+                seenUnv.add(uv.assetUrl);
+                assets.push({
+                    id: assets.length + 1, veevaApprovalId: 'SIN VERIFICAR', type: uv.type, region, country,
+                    status: 'NO VERIFICADO', approvedDate: null, expirationDate: null, daysRemaining: null,
+                    note: `No se pudieron leer los metadatos del video en Kaltura (${uv.reason}). Reintenta el escaneo.`,
+                    location: uv.pageUrl, assetUrl: uv.assetUrl, pagesCount: 1, pages: [uv.pageUrl],
+                    snippet: uv.assetUrl, screenshot: uv.screenshot
+                });
+            });
+
             // Cada fila cae en exactamente una categoria
             const count = (s) => assets.filter(a => a.status === s).length;
             const vencidos = count('VENCIDO');
@@ -733,10 +750,20 @@ class ScannerEngine {
 
             // Si PromoMats casi no devolvió fechas, el escaneo no sirve para el cumplimiento: se dice claramente por qué
             // (antes solo se veía una tabla llena de "Sin fecha" sin explicación).
-            const unresolved = assets.filter(a => a.status === 'SIN FECHA FIABLE' || a.status === 'ID NO ENCONTRADO').length;
-            if (findings.size >= 5 && unresolved / findings.size > 0.8) {
+            const unresolvedRows = assets.filter(a => a.status === 'SIN FECHA FIABLE' || a.status === 'ID NO ENCONTRADO');
+            const unresolved = unresolvedRows.length;
+            if (unresolved > 0) {
+                // Motivos agrupados (antes había que abrir el "Detalle" de cada ID para saber por qué no tenía fecha)
+                const byReason = new Map();
+                unresolvedRows.forEach(a => {
+                    const key = String(a.note || 'sin detalle').split(/[«(]/)[0].trim().slice(0, 120) || 'sin detalle';
+                    byReason.set(key, (byReason.get(key) || 0) + 1);
+                });
+                const motivos = [...byReason].sort((x, y) => y[1] - x[1]).slice(0, 4).map(([k, n]) => `${n} × ${k}`).join('; ');
                 coverage.partial = true;
-                coverage.partialReasons.unshift(`PromoMats no devolvió fecha para ${unresolved} de ${findings.size} Approval IDs: el resultado NO sirve para evaluar vigencia. Comprueba la sesión de PromoMats y revisa la nota de cada ID (columna Detalle).`);
+                coverage.partialReasons.unshift(findings.size >= 5 && unresolved / findings.size > 0.8
+                    ? `PromoMats no devolvió fecha para ${unresolved} de ${findings.size} Approval IDs: el resultado NO sirve para evaluar vigencia. Motivos: ${motivos}.`
+                    : `${unresolved} de ${findings.size} Approval IDs quedaron sin fecha en PromoMats. Motivos: ${motivos}.`);
             }
 
             return {
@@ -769,8 +796,8 @@ class ScannerEngine {
             // PASO 1: sesiones
             emit(1, 'Verificando sesiones guardadas...', 3);
             const sessions = authManager.sessionStatus();
-            // Las 3 sesiones son obligatorias (la API ya lo exige; aquí se repite por si el motor se invoca de otra forma)
-            const missingSessions = ['azmed', 'promomats', 'kaltura'].filter(s => !sessions[s]);
+            // Las 2 sesiones son obligatorias (la API ya lo exige; aquí se repite por si el motor se invoca de otra forma)
+            const missingSessions = ['azmed', 'promomats'].filter(s => !sessions[s]);
             if (missingSessions.length) {
                 throw new Error(`Faltan sesiones: ${missingSessions.join(', ')}. Conéctalas en "Cuentas" antes de escanear.`);
             }
@@ -791,7 +818,7 @@ class ScannerEngine {
                 p.on('dialog', d => d.dismiss().catch(() => {}));
                 pages.push(p);
             }
-            emit(1, `Sesiones: AzMed ${sessions.azmed ? 'OK' : 'NO'}, PromoMats ${vaultInit.success ? 'OK' : 'NO'}, Kaltura ${sessions.kaltura ? 'OK' : 'NO'}.`, 10);
+            emit(1, `Sesiones: AzMed ${sessions.azmed ? 'OK' : 'NO'}, PromoMats ${vaultInit.success ? 'OK' : 'NO'}.`, 10);
 
             // PASO 2: descubrimiento
             // Por áreas no se consulta crt.sh ni se leen sitemaps de subdominios: menos peticiones contra el WAF.
@@ -807,12 +834,25 @@ class ScannerEngine {
             // Dos colas: primero lo enlazado desde las paginas (navegacion real del sitio) y despues lo que
             // solo aparece en sitemaps, que pueden estar desactualizados (azmed.cr lista rutas que dan 404).
             const queue = [], sitemapQueue = [], queued = new Set();
+            let sitemapPagesRead = 0;   // páginas válidas que vinieron solo del sitemap (si ninguna lo es, el sitemap está obsoleto)
+            // Páginas enlazadas pero fuera de las áreas elegidas: se informan (no se analizan) para poder añadirlas
+            const outOfScopeSeen = new Set();
+            const BOILERPLATE = /(my-account|mi-cuenta|legal-notice|aviso-legal|cookie|contact-us|contacto|privacy|privacidad|terminos|terms|login|logout|sitemap)/i;
+            const noteOutOfScope = (c) => {
+                if (coverage.outOfScope.length >= 300 || outOfScopeSeen.has(c) || queued.has(c)) return;
+                const p = new URL(c).pathname;
+                if (PDF_EXT.test(p) || SKIP_EXT.test(p) || BOILERPLATE.test(p) || !/(\/[^/.]*|\.html?)$/i.test(p)) return;
+                outOfScopeSeen.add(c);
+                coverage.outOfScope.push(c);
+            };
             const pendingPdfs = new Map(); // url -> pagina que lo enlaza
             // `explicit`: URL pedida por el usuario (semillas y URLs adicionales): no se filtra por área
             const enqueue = (raw, depth, referrer, fromSitemap, explicit) => {
                 const c = this.canonicalize(raw);
                 if (!c || !this.isInScope(c, baseDomain)) return;
-                if (sectionMode && !explicit && !inSections(c, sections)) return;
+                // La página "Mi cuenta" es la sonda fiable para comprobar la sesión de AzMed
+                if (authManager.isAccountUrl(c)) authManager.rememberProtectedUrl(baseDomain, c);
+                if (sectionMode && !explicit && !inSections(c, sections)) { noteOutOfScope(c); return; }
                 const path = new URL(c).pathname;
                 if (PDF_EXT.test(path)) { if (!pendingPdfs.has(c)) pendingPdfs.set(c, referrer || null); return; }
                 if (SKIP_EXT.test(path) || queued.has(c)) return;
@@ -976,6 +1016,7 @@ class ScannerEngine {
                 }
 
                 coverage.pagesRead++;
+                if (fromSitemap) sitemapPagesRead++;
                 if (!coverage.astrazenecaSeen && /astrazeneca/i.test(data.text)) coverage.astrazenecaSeen = true;
                 const total = Math.min(config.maxPages, coverage.pagesRead + queue.length + sitemapQueue.length);
                 emit(3, `Analizando (${coverage.pagesRead}/${total}): ${finalUrl}`,
@@ -1074,15 +1115,14 @@ class ScannerEngine {
 
                     const isKaltura = /kaltura/i.test(v.src);
                     let kalturaFailed = false;
+                    let kalturaReason = '';
                     if (isKaltura) {
                         const meta = await kalturaClient.getEntryMetadata(v.src, context.request);
                         if (meta.ok) { ids = meta.ids; snippet = `Kaltura "${meta.name}" (${meta.entryId})`; }
                         else {
                             kalturaFailed = true;
-                            if (!coverage.partialReasons.some(r => r.startsWith('Kaltura:'))) {
-                                coverage.partial = true;
-                                coverage.partialReasons.push(`Kaltura: no se pudieron leer los metadatos de algún video (${meta.reason}).`);
-                            }
+                            kalturaReason = String(meta.reason || '').split('\n')[0].slice(0, 120);
+                            coverage.kalturaFailures = (coverage.kalturaFailures || 0) + 1;
                         }
                     }
                     // El texto que rodea al reproductor (v.context) puede mencionar IDs de OTROS materiales:
@@ -1094,6 +1134,9 @@ class ScannerEngine {
 
                     if (ids.length) {
                         for (const id of ids) await registerAndQueue(id, 'Video', finalUrl, v.src, snippet, getShot);
+                    } else if (kalturaFailed) {
+                        coverage.videosUnverified++;
+                        unverifiedVideos.push({ type: 'Video', pageUrl: finalUrl, assetUrl: v.src, reason: kalturaReason, screenshot: await saveShot(await this.captureEvidence(page, '')) });
                     } else {
                         coverage.videosWithoutId++;
                         noIdFindings.push({ type: 'Video', pageUrl: finalUrl, assetUrl: v.src, screenshot: await saveShot(await this.captureEvidence(page, '')) });
@@ -1108,6 +1151,12 @@ class ScannerEngine {
             const worker = async (index) => {
                 while (!this.isCancelled) {
                     if (limitReached()) break;
+                    // Sitemap obsoleto (todas sus URLs dan 404): se descarta el resto en vez de gastar cientos de peticiones
+                    // contra el WAF (azmed.cr listaba 339 de 378 rutas inexistentes)
+                    if (!coverage.sitemapDiscarded && sitemapQueue.length && coverage.sitemapStale >= 15 && sitemapPagesRead === 0) {
+                        coverage.sitemapDiscarded = sitemapQueue.length;
+                        sitemapQueue.length = 0;
+                    }
                     // Las URLs solo-sitemap se toman cuando ya se leyo alguna pagina (o no queda otra cosa)
                     const sitemapAllowed = coverage.pagesRead > 0 || active === 0;
                     const item = queue.shift() || (sitemapAllowed ? sitemapQueue.shift() : null);
@@ -1172,6 +1221,12 @@ class ScannerEngine {
                 coverage.partial = true;
                 coverage.partialReasons.push(`${coverage.pagesFailed} página(s) no se pudieron leer (ver "Páginas con error").`);
             }
+            if (coverage.kalturaFailures > 0) {
+                coverage.partial = true;
+                coverage.partialReasons.push(`Kaltura: no se pudieron leer los metadatos de ${coverage.kalturaFailures} video(s) (tiempo agotado o servicio no disponible)` +
+                    (coverage.videosUnverified ? `; ${coverage.videosUnverified} quedan como «No verificado» en lugar de «Sin ID»` : '') +
+                    '. Reintenta o sube KALTURA_TIMEOUT_SECONDS en .env.');
+            }
 
             if (coverage.pagesRead === 0) {
                 if (this.isCancelled) throw new Error('Escaneo cancelado antes de leer ninguna página.');
@@ -1189,15 +1244,23 @@ class ScannerEngine {
 
             if (coverage.pagesNeedingLogin > 0) {
                 coverage.partial = true;
-                // Se guarda una pagina protegida para validar la sesion de AzMed de forma fiable en adelante
-                authManager.rememberProtectedUrl(baseDomain, coverage.loginPages[0]);
                 if (sessions.azmed) {
-                    authManager.validation.azmed = {
-                        state: 'expired',
-                        detail: `Durante el escaneo ${coverage.pagesNeedingLogin} página(s) pidieron inicio de sesión`,
-                        checkedAt: new Date().toISOString()
-                    };
-                    coverage.partialReasons.push(`${coverage.pagesNeedingLogin} página(s) pidieron inicio de sesión: la sesión de AzMed expiró o no tiene permisos. Vuelve a iniciar sesión y repite el escaneo.`);
+                    // Pocas páginas con permisos propios NO significan sesión caducada (antes se marcaba "expirada" siempre):
+                    // se comprueba la sesión de verdad contra la página "Mi cuenta" (o la del sitio).
+                    let verdict = null;
+                    try {
+                        const probe = authManager.azmedProbeFor(targetUrl);
+                        if (probe) verdict = await authManager.validateSession('azmed', probe);
+                    } catch (e) { /* sin veredicto */ }
+                    const n = coverage.pagesNeedingLogin;
+                    if (verdict && verdict.state === 'active') {
+                        emit(4, 'La sesión de AzMed sigue válida', 74);
+                        coverage.partialReasons.push(`${n} página(s) requieren permisos adicionales de AzMed (la sesión sigue válida): ver "Páginas que pidieron sesión". No se auditaron.`);
+                    } else if (verdict && verdict.state === 'expired') {
+                        coverage.partialReasons.push(`${n} página(s) pidieron inicio de sesión y la sesión de AzMed expiró. Vuelve a iniciar sesión y repite el escaneo.`);
+                    } else {
+                        coverage.partialReasons.push(`${n} página(s) pidieron inicio de sesión (permisos o sesión caducada; no se pudo comprobar). Revisa «Cuentas» y repite el escaneo si hace falta.`);
+                    }
                 } else {
                     coverage.partialReasons.push(`${coverage.pagesNeedingLogin} página(s) exigen sesión de AzMed y no se auditaron.`);
                 }
@@ -1232,6 +1295,8 @@ class ScannerEngine {
             throw error;
         } finally {
             if (vaultStream) { try { await vaultStream.finish(); } catch (e) {} }
+            // Si las páginas protegidas se leyeron sin pedir login, se guardan las cookies renovadas de AzMed
+            if (context && coverage.pagesRead > 0 && coverage.pagesNeedingLogin === 0) await authManager.persistState('azmed', context);
             if (browser) await browser.close().catch(() => {});
             await vaultClient.close();
             await ocr.close();

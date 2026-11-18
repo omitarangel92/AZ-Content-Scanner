@@ -107,14 +107,14 @@ test('reviews: flujo válido guarda y calcula precisión', async () => {
     assert.equal(p.precision, 50);
 });
 
-test('el escaneo exige las 3 sesiones (AzMed, PromoMats y Kaltura)', async () => {
+test('el escaneo exige las 2 sesiones (AzMed y PromoMats)', async () => {
     // DATA_DIR es una carpeta vacía: no hay ninguna sesión guardada
     const res = await post('/api/scan', { targetUrl: 'https://www.azmed.cr', region: 'CAMCAR', country: 'CR', sections: [] });
     assert.equal(res.status, 409);
     assert.equal(res.json.success, false);
     assert.equal(res.json.sessionExpired, true);
-    assert.deepEqual(res.json.missing.sort(), ['azmed', 'kaltura', 'promomats']);
-    assert.match(res.json.error, /AzMed.*PromoMats.*Kaltura|Faltan sesiones/);
+    assert.deepEqual(res.json.missing.sort(), ['azmed', 'promomats']);
+    assert.match(res.json.error, /AzMed.*PromoMats|Faltan sesiones/);
 });
 
 test('detección de áreas: valida token, URL y dominio permitido', async () => {
