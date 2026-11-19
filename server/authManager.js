@@ -146,6 +146,16 @@ class AuthManager {
             if (!pages.length) return;
             const page = pages[pages.length - 1];
             const u = page.url().toLowerCase();
+            // Página de error de Chrome (ERR_TIMED_OUT, proxy, DNS…): no se queda esperando, se cierra todo y se avisa
+            const errPage = u.startsWith('chrome-error:') || await page.evaluate(() => /\bERR_[A-Z_]{4,}\b/.test((document.body && document.body.innerText) || '')).catch(() => false);
+            if (errPage) {
+                pending.errSince = pending.errSince || Date.now();
+                if (Date.now() - pending.errSince > 20000) {
+                    await this.abortLogin(service, pending, 'El portal de inicio de sesión no respondió (ERR_TIMED_OUT: suele ser el proxy, la VPN o el firewall de la empresa). Se cerró la ventana. Revisa la red o define PROXY_SERVER en el .env y pulsa "Iniciar sesión" de nuevo.');
+                }
+                return;
+            }
+            pending.errSince = 0;
             const onLogin = isLoginUrl(u);
             const pwd = await page.$('input[type="password"]').catch(() => null);
             const pwdVisible = pwd ? await pwd.isVisible().catch(() => false) : false;
@@ -331,14 +341,30 @@ class AuthManager {
         return { success: true, message: 'Sesión guardada.' };
     }
 
+    // Cierra el navegador sin quedarse esperando si no responde (a los 5 s se sigue adelante)
+    async closeBrowser(browser) {
+        await Promise.race([browser.close().catch(() => {}), new Promise(r => setTimeout(r, 5000))]);
+    }
+
     async cancelLogin(service) {
         const p = this.pending[service];
         if (p) {
             clearInterval(p.timer); clearInterval(p.blankTimer);
             clearTimeout(p.expireTimer);
             delete this.pending[service];
-            await p.browser.close().catch(() => {});
+            await this.closeBrowser(p.browser);
         }
+    }
+
+    // Cierra la ventana de login y deja el estado en error con el motivo (no queda nada colgado)
+    async abortLogin(service, pending, detail) {
+        if (this.pending[service] !== pending) return;
+        clearInterval(pending.timer); clearInterval(pending.blankTimer);
+        clearTimeout(pending.expireTimer);
+        delete this.pending[service];
+        this.validation[service] = { state: 'error', detail, checkedAt: new Date().toISOString() };
+        console.log(`[sesión] ${service}: login cancelado: ${detail}`);
+        await this.closeBrowser(pending.browser);
     }
 
     // Cierra todas las ventanas de login (al apagar el servidor)
