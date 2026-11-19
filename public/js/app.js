@@ -941,8 +941,10 @@ function renderReviewBreakdown(assets) {
     const el = $('review-breakdown');
     const n = reviewBreakdown(assets);
     const parts = Object.entries(n).map(([k, v]) => `${v} ${k}`);
-    el.hidden = !parts.length;
-    el.textContent = parts.length ? `Por revisar: ${parts.join(' · ')}.` : '';
+    const retired = assets.filter(a => a.status === 'RETIRADO').length;
+    const text = [parts.length ? `Por revisar: ${parts.join(' · ')}.` : '', retired ? `Retirados en PromoMats pero aún publicados: ${retired}.` : ''].filter(Boolean).join(' ');
+    el.hidden = !text;
+    el.textContent = text;
 }
 
 function closeHistoryDetail() { historyScan = null; mountAndRender(); }

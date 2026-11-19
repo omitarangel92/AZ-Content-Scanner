@@ -881,7 +881,8 @@ class ScannerEngine {
             const noteOutOfScope = (c) => {
                 if (coverage.outOfScope.length >= 300 || outOfScopeSeen.has(c) || queued.has(c)) return;
                 const p = new URL(c).pathname;
-                if (PDF_EXT.test(p) || SKIP_EXT.test(p) || BOILERPLATE.test(p) || !/(\/[^/.]*|\.html?)$/i.test(p)) return;
+                // Un enlace sin nombre de página (…/home/.html) es un href roto del sitio, no una página que añadir
+                if (PDF_EXT.test(p) || SKIP_EXT.test(p) || BOILERPLATE.test(p) || /\/\.html?$/i.test(p) || !/(\/[^/.]*|\.html?)$/i.test(p)) return;
                 outOfScopeSeen.add(c);
                 coverage.outOfScope.push(c);
             };
