@@ -164,6 +164,7 @@ az-content-scanner/
 ## 7. Notas de operación
 
 - **Países**: CR, MX, BR, AR, CL, UY. Ecuador, Perú y Colombia están retirados: `azmed.ec` y `azmed.pe` no existen y `azmed.co` **no es de AstraZeneca**. Añadirlos en `server/config.js` y `ALLOWED_DOMAINS` cuando se conozcan las URLs reales.
+- **Proxy para el login y los escaneos**: si la ventana de login de PromoMats da `ERR_TIMED_OUT` en la red de la empresa, define `PROXY_SERVER` (p. ej. `http://proxy.empresa.com:8080`) en el `.env`; opcionales `PROXY_USERNAME`, `PROXY_PASSWORD` y `PROXY_BYPASS`.
 - **Proxy corporativo (zScaler)**: Kaltura (lectura anónima de metadatos, con `KALTURA_TIMEOUT_SECONDS`/`KALTURA_RETRIES`) y crt.sh se consultan a través de Chromium/Playwright, que usa la red del navegador. Alternativa global: `NODE_EXTRA_CA_CERTS=/ruta/certificado-raiz.pem`.
 - **WAF (CloudFront)**: bloquea el user-agent `HeadlessChrome`; el escáner usa el de un Chrome normal. Si aparecen páginas "Bloqueadas por WAF", baja `CRAWL_CONCURRENCY`.
 - **Sesiones que duran**: se guardan cookies, `localStorage` y `sessionStorage`; se renuevan tras cada uso y cada `SESSION_KEEPALIVE_MINUTES` (20 por defecto) se "toca" cada servicio para evitar el cierre por inactividad. La sonda de AzMed es la página «Mi cuenta» del sitio.

@@ -74,6 +74,7 @@ class AuthManager {
         // Se parte de un perfil limpio: unas cookies caducadas de la sesión anterior rompen el flujo SAML.
         const launchOpts = {
             headless: false,
+            ...(config.proxy ? { proxy: config.proxy } : {}),
             ignoreDefaultArgs: ['--enable-automation'],
             // --disable-quic: en redes corporativas el tráfico UDP/QUIC suele bloquearse y las cargas se quedan colgadas
             args: ['--disable-blink-features=AutomationControlled', '--disable-quic', ...(config.allowInsecureTls ? ['--ignore-certificate-errors'] : [])]
@@ -372,6 +373,7 @@ class AuthManager {
         try {
             browser = await chromium.launch({
                 headless: true,
+                ...(config.proxy ? { proxy: config.proxy } : {}),
                 args: config.allowInsecureTls ? ['--ignore-certificate-errors'] : []
             });
             const context = await browser.newContext({
@@ -480,6 +482,7 @@ class AuthManager {
     async createServiceContext(service) {
         const browser = await chromium.launch({
             headless: true,
+            ...(config.proxy ? { proxy: config.proxy } : {}),
             args: config.allowInsecureTls ? ['--ignore-certificate-errors'] : []
         });
         const context = await browser.newContext({

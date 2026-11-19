@@ -23,6 +23,12 @@ module.exports = {
     // Solo accesible desde este equipo: la API maneja sesiones corporativas guardadas
     host: process.env.HOST || '127.0.0.1',
     allowInsecureTls: process.env.ALLOW_INSECURE_TLS === 'true',
+    // Proxy para los navegadores de la app (login y escaneos). Vacío = conexión directa. Ej.: http://proxy.empresa.com:8080
+    proxy: process.env.PROXY_SERVER ? {
+        server: process.env.PROXY_SERVER.trim(),
+        ...(process.env.PROXY_USERNAME ? { username: process.env.PROXY_USERNAME, password: process.env.PROXY_PASSWORD || '' } : {}),
+        ...(process.env.PROXY_BYPASS ? { bypass: process.env.PROXY_BYPASS.trim() } : {})
+    } : undefined,
     allowedDomains: list(process.env.ALLOWED_DOMAINS),
     // Nombres de host adicionales aceptados en la cabecera Host (solo si se publica el servidor con HOST/proxy)
     extraHosts: list(process.env.ALLOWED_HOSTS),
