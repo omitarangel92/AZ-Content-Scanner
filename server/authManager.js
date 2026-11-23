@@ -95,7 +95,7 @@ class AuthManager {
         await context.addInitScript(() => { Object.defineProperty(navigator, 'webdriver', { get: () => undefined }); });
         const page = await context.newPage();
         const pending = {
-            browser, context, host: this.serviceHost(service, url), protectedStart,
+            browser, context, host: this.serviceHost(service, url), protectedStart, startUrl: url, retries: 0,
             sawLogin: false, stable: 0, busy: false, timer: null, expireTimer: null
         };
         this.pending[service] = pending;
@@ -113,7 +113,8 @@ class AuthManager {
             };
         });
 
-        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+        // Sin await: la ventana se abre y el panel responde al instante; la carga lenta no bloquea nada
+        page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => {});
         // Comprobacion ligera cada 2 s (solo lee la URL y busca el campo de contraseña: no abre pestañas)
         pending.timer = setInterval(() => this.checkLogin(service, pending).catch(() => {}), 2000);
         // El portal de login (Azure B2C) puede tardar de 10 a 60 s en responder: recargar antes de tiempo reinicia esa
@@ -150,7 +151,15 @@ class AuthManager {
             const errPage = u.startsWith('chrome-error:') || await page.evaluate(() => /\bERR_[A-Z_]{4,}\b/.test((document.body && document.body.innerText) || '')).catch(() => false);
             if (errPage) {
                 pending.errSince = pending.errSince || Date.now();
-                if (Date.now() - pending.errSince > 20000) {
+                // Una red lenta o inestable falla a veces y a la siguiente carga: se reintenta la carga hasta 3 veces
+                if (Date.now() - pending.errSince > 8000 && (pending.retries || 0) < 3) {
+                    pending.retries = (pending.retries || 0) + 1;
+                    pending.errSince = 0;
+                    console.log(`[sesión] ${service}: el portal no respondió, reintentando la carga (${pending.retries}/3)…`);
+                    page.goto(pending.startUrl, { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => {});
+                    return;
+                }
+                if (Date.now() - pending.errSince > 8000) {
                     await this.abortLogin(service, pending, 'El portal de inicio de sesión no respondió (ERR_TIMED_OUT: suele ser el proxy, la VPN o el firewall de la empresa). Se cerró la ventana. Revisa la red o define PROXY_SERVER en el .env y pulsa "Iniciar sesión" de nuevo.');
                 }
                 return;
