@@ -13,6 +13,7 @@
     "lint": "node scripts/lint.js",
     "check": "npm run lint && npm test",
     "postinstall": "npx playwright install chromium || echo \"AVISO: no se pudo descargar Chromium (proxy?). Reintenta con: npx playwright install chromium\"",
+    "diagnose": "node scripts/diagnose-login.js",
     "check:responsive": "node scripts/responsive-check.js"
   },
   "dependencies": {
